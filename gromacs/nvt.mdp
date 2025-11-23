@@ -1,0 +1,31 @@
+; nvt_tip4p.mdp - NVT equilibration for bulk water TIP4P/2005
+integrator      = md
+dt              = 0.002      ; 2 fs
+nsteps          = 50000      ; 100 ps
+
+nstxout         = 0
+nstvout         = 0
+nstfout         = 100        ; write forces every 100 steps
+nstenergy       = 100        ; write energies every 100 steps
+nstlog          = 100
+nstxout-compressed = 100     ; write coordinates every 100 steps (to .xtc)
+
+cutoff-scheme   = Verlet
+ns_type         = grid
+rlist           = 1.0
+rcoulomb        = 1.0
+rvdw            = 1.0
+coulombtype     = PME
+pbc             = xyz
+
+tcoupl          = V-rescale
+tc-grps         = System
+tau-t           = 0.1
+ref-t           = 298
+
+pcoupl          = no
+
+constraints     = h-bonds
+constraint-algorithm = lincs
+lincs-iter      = 1
+lincs-order     = 4

@@ -1,0 +1,32 @@
+; npt.mdp - NPT equilibration
+integrator      = md
+dt              = 0.002
+nsteps          = 50000      ; 100 ps
+
+nstxout-compressed = 100
+nstfout         = 100
+nstenergy       = 100
+
+cutoff-scheme   = Verlet
+ns_type         = grid
+rlist           = 1.0
+rcoulomb        = 1.0
+rvdw            = 1.0
+coulombtype     = PME
+pbc             = xyz
+
+tcoupl          = V-rescale
+tc-grps         = System
+tau-t           = 0.1
+ref-t           = 298
+
+pcoupl          = Parrinello-Rahman
+pcoupltype      = isotropic
+tau-p           = 2.0
+ref-p           = 1.0
+compressibility = 4.5e-5
+
+constraints     = h-bonds
+constraint-algorithm = lincs
+lincs-iter      = 1
+lincs-order     = 4
