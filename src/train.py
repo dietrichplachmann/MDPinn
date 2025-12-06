@@ -1,10 +1,18 @@
 import os
+import random
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.optim as optim
 
 from model import CorrectionPotential
+from checkpointing import create_run_id, save_checkpoint, save_config_json
+
+
+def set_seeds(seed: int = 12345):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def load_split(npz_path, device):
@@ -25,7 +33,6 @@ def compute_train_loss_for_index(model, idx,
     """
     Training loss for a single configuration index.
     Uses forces + energies + symmetry + PBC.
-    This mirrors train_minimal.py which works.
     """
     R = R_all[idx].clone().detach().requires_grad_(True)  # (N, 3)
     Z = Z_all[idx]                                        # (N,)
@@ -82,8 +89,6 @@ def compute_valid_loss_for_index(model, idx,
     DOES NOT use forces or autograd.grad (no gradients in validation).
     Uses only energy + symmetry + PBC.
     """
-
-    # No requires_grad here, we are in eval mode
     R = R_all[idx]      # (N, 3)
     Z = Z_all[idx]      # (N,)
     E_ref = E_all[idx]  # scalar
@@ -127,12 +132,45 @@ def compute_valid_loss_for_index(model, idx,
 
 
 def train():
+    # ---- Device + seeds ----
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using device:", device)
 
+    # --- Hyperparameters and config ---
+    config = {
+        "model_type": "pairwise_rbf_cutoff",
+        "model_params": {
+            "emb_dim": 16,
+            "hidden_dim": 64,
+            "n_rbf": 32,
+            "cutoff": 6.0,
+            "max_Z": 100,
+        },
+        "training_params": {
+            "n_epochs": 20,
+            "steps_per_epoch": 20,
+            "learning_rate": 1e-3,
+            "loss_weights": {
+                "wF": 1.0,
+                "wE": 0.1,
+                "wS": 0.01,
+                "wBC": 0.01,
+            },
+            "seed": 12345,
+        },
+        "data": {
+            "train_npz": "data/configs_train.npz",
+            "valid_npz": "data/configs_valid.npz",
+            "test_npz":  "data/configs_test.npz",
+        },
+    }
+
+    # Set seeds from config
+    set_seeds(config["training_params"]["seed"])
+
     # --- Load splits ---
-    train_npz = os.path.join("data", "configs_train.npz")
-    valid_npz = os.path.join("data", "configs_valid.npz")
+    train_npz = config["data"]["train_npz"]
+    valid_npz = config["data"]["valid_npz"]
 
     R_tr, Z_tr, F_tr, E_tr, box_tr = load_split(train_npz, device)
     R_va, Z_va, F_va, E_va, box_va = load_split(valid_npz, device)
@@ -143,20 +181,38 @@ def train():
     print(f"Train: {B_tr} configs, {N} atoms each")
     print(f"Valid: {B_va} configs")
 
+    # record data sizes in config (useful for later)
+    config["data"]["num_train"] = int(B_tr)
+    config["data"]["num_valid"] = int(B_va)
+    config["data"]["num_atoms"] = int(N)
+
     # --- Model & optimizer ---
-    model = CorrectionPotential(hidden_dim=64).to(device)
-    opt = optim.Adam(model.parameters(), lr=1e-3)
+    mp = config["model_params"]
+    model = CorrectionPotential(
+        emb_dim=mp["emb_dim"],
+        hidden_dim=mp["hidden_dim"],
+        n_rbf=mp["n_rbf"],
+        cutoff=mp["cutoff"],
+        max_Z=mp["max_Z"],
+    ).to(device)
 
-    # Loss weights
-    weights = {
-        "wF":  1.0,
-        "wE":  0.1,
-        "wS":  0.01,
-        "wBC": 0.01,
-    }
+    opt = torch.optim.Adam(
+        model.parameters(),
+        lr=config["training_params"]["learning_rate"]
+    )
 
-    n_epochs = 20
-    steps_per_epoch = 50  # number of random train configs per epoch
+    # Loss weights, epochs, steps from config
+    weights = config["training_params"]["loss_weights"]
+    n_epochs = config["training_params"]["n_epochs"]
+    steps_per_epoch = config["training_params"]["steps_per_epoch"]
+
+    # --- Tracking losses over epochs ---
+    train_loss_history = []
+    valid_loss_history = []
+
+    # --- Unique run ID for this training session ---
+    run_id = create_run_id()
+    print(f"Run ID: {run_id}")
 
     for epoch in range(1, n_epochs + 1):
         # ----- TRAIN -----
@@ -176,6 +232,7 @@ def train():
             train_loss_values.append(logs["Total"])
 
         mean_train = sum(train_loss_values) / len(train_loss_values)
+        train_loss_history.append(mean_train)
 
         # ----- VALIDATION -----
         model.eval()
@@ -190,11 +247,30 @@ def train():
                 valid_loss_values.append(logs["Total"])
 
         mean_valid = sum(valid_loss_values) / len(valid_loss_values)
+        valid_loss_history.append(mean_valid)
 
-        print(f"Epoch {epoch:03d} | Train {mean_train:.6f} | Valid {mean_valid:.6f}")
+        print(f"Epoch {epoch:03d} | Train {mean_train:.6f} | Valid {mean_valid:.10f}")
 
+    # --- Save simple final weights for quick use ---
     torch.save(model.state_dict(), "trained_model.pth")
     print("Training complete → saved to trained_model.pth")
+
+    # --- Save full checkpoint (weights + optimizer + config + history) ---
+    train_history = {
+        "train_loss": train_loss_history,
+        "valid_loss": valid_loss_history,
+    }
+
+    save_checkpoint(
+        run_id=run_id,
+        model=model,
+        optimizer=opt,
+        config=config,
+        train_history=train_history,
+        checkpoint_dir="checkpoints",
+    )
+
+    save_config_json(run_id, config, checkpoint_dir="checkpoints")
 
 
 if __name__ == "__main__":
