@@ -1,0 +1,32 @@
+{
+  "model_type": "pairwise_rbf_cutoff",
+  "model_params": {
+    "emb_dim": 16,
+    "hidden_dim": 64,
+    "n_rbf": 32,
+    "cutoff": 6.0,
+    "max_Z": 100
+  },
+  "training_params": {
+    "n_epochs": 20,
+    "steps_per_epoch": 20,
+    "learning_rate": 0.001,
+    "loss_weights": {
+      "wF": 1.0,
+      "wE": 0.1,
+      "wS": 0.01,
+      "wBC": 0.01,
+      "wNVE": 0.001
+    },
+    "seed": 12345
+  },
+  "data": {
+    "train_npz": "data/configs_train.npz",
+    "valid_npz": "data/configs_valid.npz",
+    "test_npz": "data/configs_test.npz",
+    "nve_npz": "data/nve_trajs.npz",
+    "num_train": 4000,
+    "num_valid": 500,
+    "num_atoms": 1041
+  }
+}

@@ -3,6 +3,64 @@ import torch
 def to_tensor(x, device):
     return torch.tensor(x, dtype=torch.float32, device=device)
 
+def nve_loss_from_traj(model, nve_batch, device):
+    """
+    nve_batch is a dict with:
+        R_traj_np:   (T, N, 3)
+        V_traj_np:   (T, N, 3)
+        Z_np:        (N,)
+        box_L_np:    (3,)        # not actually needed for NVE, but handy for later
+        U_ref_traj_np: (T,)      # analytic bonded + long-range energy
+        masses_np:   (N,)        # atomic masses
+
+    Returns:
+        L_NVE (scalar tensor)
+    """
+    # unpack
+    R_traj_np     = nve_batch["R_traj_np"]
+    V_traj_np     = nve_batch["V_traj_np"]
+    Z_np          = nve_batch["Z_np"]
+    box_L_np      = nve_batch["box_L_np"]
+    U_ref_traj_np = nve_batch["U_ref_traj_np"]
+    masses_np     = nve_batch["masses_np"]
+
+    # convert to tensors
+    R_traj = torch.tensor(R_traj_np, dtype=torch.float32, device=device)   # (T, N, 3)
+    V_traj = torch.tensor(V_traj_np, dtype=torch.float32, device=device)   # (T, N, 3)
+    Z      = torch.tensor(Z_np,      dtype=torch.long,   device=device)    # (N,)
+    box_L  = torch.tensor(box_L_np,  dtype=torch.float32, device=device)   # (3,)
+    U_ref_traj = torch.tensor(U_ref_traj_np, dtype=torch.float32, device=device)  # (T,)
+    masses = torch.tensor(masses_np, dtype=torch.float32, device=device)   # (N,)
+
+    T, N, _ = R_traj.shape
+
+    # ----- kinetic energy K(t) -----
+    # v^2 per atom: (T, N)
+    v2 = (V_traj ** 2).sum(dim=-1)
+    # masses broadcast: (T, N)
+    m_broadcast = masses.view(1, N).expand(T, N)
+    # K(t): (T,)
+    K_traj = 0.5 * (m_broadcast * v2).sum(dim=1)
+
+    # ----- NN short-range correction U_phi(t) -----
+    U_phi_list = []
+    for t in range(T):
+        R_t = R_traj[t]  # (N, 3), no grad wrt R needed for NVE
+        # We only need grad wrt model params, so no requires_grad_ on R_t
+        E_t = model(R_t, Z)  # scalar or (1,)
+        U_phi_list.append(E_t.squeeze())
+
+    U_phi_traj = torch.stack(U_phi_list, dim=0)  # (T,)
+
+    # ----- total hybrid energy along the trajectory -----
+    E_tot_traj = K_traj + U_ref_traj + U_phi_traj  # (T,)
+
+    # ----- NVE loss: penalize drift from t=0 -----
+    E0 = E_tot_traj[0]
+    diff = E_tot_traj - E0
+    L_NVE = torch.mean(diff ** 2)
+
+    return L_NVE
 
 def momentum_symmetry_loss(R, F_pred):
     """
@@ -95,19 +153,13 @@ def ic_loss(r0_pred, v0_pred, r0_true, v0_true):
     vel_term = torch.mean((v0_pred - v0_true) ** 2)
     return pos_term + vel_term
 
-def total_loss(model, batch, weights, device, traj=None, ic=None):
+def total_loss(model, batch, weights, device, nve_batch=None):
     """
     batch = (R_np, Z_np, F_ref_np, E_ref_np, box_L_np)
 
-    Optional:
-      traj: dict, may contain
-          - "E_tot_traj_np": np.ndarray with shape (T,) or (B, T)
-      ic: dict, may contain
-          - "r0_pred", "v0_pred", "r0_true", "v0_true" (all np arrays (N,3))
-
-    weights should contain:
-      "wF", "wE", "wS", "wNVE", "wIC", "wBC"
-      (and you can add more, like "wTrans" if you keep the random-translation term).
+    weights dict now expected to contain:
+        "wF", "wE", "wS", "wBC", "wNVE"
+    nve_batch: optional dict for NVE, see nve_loss_from_traj
     """
 
     # unpack batch
@@ -117,109 +169,54 @@ def total_loss(model, batch, weights, device, traj=None, ic=None):
     R     = to_tensor(R_np, device).clone().detach().requires_grad_(True)  # (N, 3)
     Z     = torch.tensor(Z_np, dtype=torch.long, device=device)            # (N,)
     F_ref = to_tensor(F_ref_np, device)                                    # (N, 3)
-    E_ref = torch.tensor(E_ref_np, dtype=torch.float32, device=device)     # scalar or (B,)
+    E_ref = torch.tensor(E_ref_np, dtype=torch.float32, device=device)     # scalar
     box_L = to_tensor(box_L_np, device)                                    # (3,)
 
-    # --- energy ---
-    E_pred = model(R, Z)  # U_phi(R,Z)
+    # compute energy
+    E_pred = model(R, Z)
 
     if not E_pred.requires_grad:
         raise RuntimeError("E_pred lost its grad_fn — R did not enter computation graph.")
 
-    # --- forces from autograd ---
-    F_pred = -torch.autograd.grad(
-        E_pred, R,
-        grad_outputs=torch.ones_like(E_pred),
-        create_graph=True
-    )[0]  # (N, 3)
+    # forces from autograd
+    F_pred = -torch.autograd.grad(E_pred, R, create_graph=True)[0]
 
-    # =========================
-    #  L_F: force matching term
-    # =========================
-    L_F = torch.mean((F_pred - F_ref) ** 2)
+    # force + energy losses
+    L_F = torch.mean((F_pred - F_ref)**2)
+    L_E = torch.mean((E_pred - E_ref)**2)
 
-    # ===================================
-    #  L_E: energy matching (hybrid vs ref)
-    # ===================================
-    L_E = torch.mean((E_pred - E_ref) ** 2)
+    # symmetry (translation invariance)
+    c = torch.randn(1, 3, device=device)
+    L_sym = torch.mean((model(R + c, Z) - E_pred)**2)
 
-    # ==========================================
-    #  L_sym: linear + angular momentum symmetry
-    # ==========================================
-    L_sym = momentum_symmetry_loss(R, F_pred)
+    # periodic BC (energy only, as before)
+    L_vec = box_L.view(1, 3)
+    L_bc = torch.mean((model(R + L_vec, Z) - E_pred)**2)
 
-    # (OPTIONAL) keep your original translation invariance term
-    # if you still like it; give it its own weight "wTrans".
-    # c = torch.randn(1, 3, device=device)
-    # L_trans = torch.mean((model(R + c, Z) - E_pred) ** 2)
+    # ----- NVE term -----
+    if nve_batch is not None and weights.get("wNVE", 0.0) != 0.0:
+        L_NVE = nve_loss_from_traj(model, nve_batch, device)
+    else:
+        L_NVE = torch.tensor(0.0, device=device)
 
-    # =====================
-    #  L_BC: periodic BCs
-    # =====================
-    L_BC = periodic_bc_loss(model, R, Z, box_L, F_pred)
-
-    # ======================
-    #  L_NVE: energy drift
-    # ======================
-    L_NVE = torch.tensor(0.0, device=device)
-    if traj is not None and "E_tot_traj_np" in traj:
-        E_tot_traj = to_tensor(traj["E_tot_traj_np"], device)
-        L_NVE_val = nve_loss(E_tot_traj)
-        if L_NVE_val is not None:
-            L_NVE = L_NVE_val
-
-    # ==============================
-    #  L_IC: initial conditions term
-    # ==============================
-    L_IC = torch.tensor(0.0, device=device)
-    if ic is not None:
-        r0_pred = ic.get("r0_pred", None)
-        v0_pred = ic.get("v0_pred", None)
-        r0_true = ic.get("r0_true", None)
-        v0_true = ic.get("v0_true", None)
-
-        # convert if provided as numpy
-        def _maybe_to_tensor(x):
-            if x is None:
-                return None
-            if isinstance(x, torch.Tensor):
-                return x.to(device=device, dtype=torch.float32)
-            return to_tensor(x, device)
-
-        r0_pred = _maybe_to_tensor(r0_pred)
-        v0_pred = _maybe_to_tensor(v0_pred)
-        r0_true = _maybe_to_tensor(r0_true)
-        v0_true = _maybe_to_tensor(v0_true)
-
-        L_IC_val = ic_loss(r0_pred, v0_pred, r0_true, v0_true)
-        if L_IC_val is not None:
-            L_IC = L_IC_val
-
-    # ===================
-    #  TOTAL LOSS
-    # ===================
     total = (
-        weights["wF"]   * L_F   +
-        weights["wE"]   * L_E   +
-        weights["wS"]   * L_sym +
-        weights["wNVE"] * L_NVE +
-        weights["wIC"]  * L_IC  +
-        weights["wBC"]  * L_BC
-        # + weights.get("wTrans", 0.0) * L_trans   # if you keep translation invariance separately
+        weights["wF"] * L_F +
+        weights["wE"] * L_E +
+        weights["wS"] * L_sym +
+        weights["wBC"] * L_bc +
+        weights["wNVE"] * L_NVE
     )
 
     logs = {
-        "F":     L_F.item(),
-        "E":     L_E.item(),
-        "Sym":   L_sym.item(),
-        "NVE":   L_NVE.item(),
-        "IC":    L_IC.item(),
-        "PBC":   L_BC.item(),
+        "F": L_F.item(),
+        "E": L_E.item(),
+        "Sym": L_sym.item(),
+        "PBC": L_bc.item(),
+        "NVE": L_NVE.item(),
         "Total": total.item(),
     }
 
     return total, logs
-
 
 '''
 def total_loss(model, batch, weights, device):
