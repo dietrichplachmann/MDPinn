@@ -336,7 +336,7 @@ def train():
         print(
             f"Epoch {epoch:03d} | "
             f"Train {mean_train:.6f} | "
-            f"Valid {mean_valid:.10f}"
+            f"Valid {mean_valid:.10f} | "
         )
 
     # --- Save simple final weights for quick use ---

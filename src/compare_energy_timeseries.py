@@ -185,10 +185,10 @@ def main():
 
     # ---- Plot Overlay----
     plt.figure(figsize=(10, 6))
-    plt.plot(t_common, E_gmx_shift, label="GROMACS Potential (shifted)")
-    plt.plot(t_common, E_model_shift, label="Model Potential (shifted)", alpha=0.7)
+    plt.plot(t_common, E_gmx_shift, label="GROMACS Potential")
+    plt.plot(t_common, E_model_shift, label="Model Potential", alpha=0.7)
     plt.xlabel("Time (ps)")
-    plt.ylabel("Potential Energy (kJ/mol, mean-shifted)")
+    plt.ylabel("Potential Energy (kJ/mol)")
     plt.title("GROMACS vs PINN Model Potential Energy Over Time")
     plt.legend()
     plt.tight_layout()
@@ -197,14 +197,14 @@ def main():
     plt.figure(figsize=(10, 4))
     plt.plot(t_common, E_gmx_shift)
     plt.xlabel("Time (ps)")
-    plt.ylabel("Potential Energy (kJ/mol, shifted)")
+    plt.ylabel("Potential Energy (kJ/mol)")
     plt.title("GROMACS Potential Energy Over Time")
 
     # ---- Plot Model ----
     plt.figure(figsize=(10, 4))
     plt.plot(t_common, E_model_shift)
     plt.xlabel("Time (ps)")
-    plt.ylabel("Potential Energy (kJ/mol, shifted)")
+    plt.ylabel("Potential Energy (kJ/mol)")
     plt.title("PINN Model Potential Energy Over Time")
 
     plt.show()
