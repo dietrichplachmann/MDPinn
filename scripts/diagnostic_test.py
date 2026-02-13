@@ -47,7 +47,7 @@ def test_dataset():
         from torchmdnet.datasets import MD17
 
         print("Creating MD17 dataset (aspirin)...")
-        dataset = MD17(root='./data', dataset_arg='aspirin')
+        dataset = MD17(root='./data', molecules='aspirin')
         print(f"✓ Dataset created!")
         print(f"  Length: {len(dataset)}")
         print(f"  Sample keys: {dataset[0].keys}")
