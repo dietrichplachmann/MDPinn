@@ -27,7 +27,11 @@ def test_imports():
     # Test TorchMD-NET
     try:
         import torchmdnet
-        print(f"✓ TorchMD-NET {torchmdnet.__version__}")
+        try:
+            version = torchmdnet.__version__
+        except AttributeError:
+            version = "installed (version unknown)"
+        print(f"✓ TorchMD-NET {version}")
     except ImportError as e:
         print(f"✗ TorchMD-NET FAILED: {e}")
         all_good = False
