@@ -284,6 +284,8 @@ def train_physics_informed_model(
         model_args['max_z'] = 128
     if 'max_num_neighbors' not in model_args:
         model_args['max_num_neighbors'] = 64
+    if 'equivariance_invariance_group' not in model_args:
+        model_args['equivariance_invariance_group'] = 'O(3)'
     model = create_physics_informed_model(model_args)
 
     # Setup data

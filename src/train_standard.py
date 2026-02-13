@@ -107,6 +107,8 @@ def train_standard_model(
         model_args['max_z'] = 128
     if 'max_num_neighbors' not in model_args:
         model_args['max_num_neighbors'] = 64
+    if 'equivariance_invariance_group' not in model_args:
+        model_args['equivariance_invariance_group'] = 'O(3)'
     model = create_model(model_args)
 
     # Setup data
