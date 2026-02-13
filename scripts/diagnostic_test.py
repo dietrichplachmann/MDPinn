@@ -95,12 +95,9 @@ def test_model_creation():
 
         print("Testing minimal model args...")
         model_args = {
-            # Required
             'model': 'tensornet',
             'prior_model': None,
             'output_model': 'Scalar',
-
-            # Architecture
             'embedding_dimension': 128,
             'num_layers': 3,
             'num_rbf': 32,
@@ -109,18 +106,13 @@ def test_model_creation():
             'activation': 'silu',
             'max_z': 100,
             'max_num_neighbors': 128,
-
-            # Training
             'derivative': True,
             'lr': 0.0001,
-
-            # Loss weights
             'energy_weight': 0.05,
             'force_weight': 0.95,
-
-            # EMA (might be required)
             'ema_alpha_y': 1.0,
             'ema_alpha_dy': 1.0,
+            'precision': 32
         }
 
         print("Creating model...")
@@ -187,6 +179,7 @@ def test_full_integration():
             'force_weight': 0.95,
             'ema_alpha_y': 1.0,
             'ema_alpha_dy': 1.0,
+            'precision': 32
         }
         model = create_model(model_args)
 
