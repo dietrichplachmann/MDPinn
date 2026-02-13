@@ -286,6 +286,10 @@ def train_physics_informed_model(
         model_args['max_num_neighbors'] = 64
     if 'equivariance_invariance_group' not in model_args:
         model_args['equivariance_invariance_group'] = 'O(3)'
+    if 'derivative' not in model_args:
+        model_args['derivative'] = False
+    if 'atom_filter' not in model_args:
+        model_args['atom_filter'] = -1
     model = create_physics_informed_model(model_args)
 
     # Setup data
