@@ -275,6 +275,15 @@ def train_physics_informed_model(
     print("Creating physics-informed model...")
     if 'precision' not in model_args:
         model_args['precision'] = 32
+    # using defaults from documentation, this can be changed later
+    if 'cutoff_lower' not in model_args:
+        model_args['cutoff_lower'] = 0.0
+    if 'cutoff_upper' not in model_args:
+        model_args['cutoff_upper'] = 5.0
+    if 'max_z' not in model_args:
+        model_args['max_z'] = 128
+    if 'max_num_neighbors' not in model_args:
+        model_args['max_num_neighbors'] = 64
     model = create_physics_informed_model(model_args)
 
     # Setup data
