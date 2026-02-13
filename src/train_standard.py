@@ -115,6 +115,8 @@ def train_standard_model(
         model_args['atom_filter'] = -1
     if 'prior_model' not in model_args:
         model_args['prior_model'] = None
+    if 'output_model' not in model_args:
+        model_args['output_model'] = 'Scalar'
     model = create_model(model_args)
 
     # Setup data

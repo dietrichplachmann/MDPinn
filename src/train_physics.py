@@ -292,6 +292,8 @@ def train_physics_informed_model(
         model_args['atom_filter'] = -1
     if 'prior_model' not in model_args:
         model_args['prior_model'] = None
+    if 'output_model' not in model_args:
+        model_args['output_model'] = 'Scalar'
     model = create_physics_informed_model(model_args)
 
     # Setup data
