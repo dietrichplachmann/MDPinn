@@ -2,7 +2,7 @@ import os
 import numpy as np
 import torch
 
-from model import CorrectionPotential
+from src.depreciated.model import CorrectionPotential
 
 
 def load_split(npz_path, device):

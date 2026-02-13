@@ -3,8 +3,8 @@ import random
 import numpy as np
 import torch
 
-from model import CorrectionPotential
-from checkpointing import create_run_id, save_checkpoint, save_config_json
+from src.depreciated.model import CorrectionPotential
+from src.depreciated.checkpointing import create_run_id, save_checkpoint, save_config_json
 
 
 def set_seeds(seed: int = 12345):
