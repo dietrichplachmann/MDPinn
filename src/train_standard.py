@@ -117,6 +117,8 @@ def train_standard_model(
         model_args['prior_model'] = None
     if 'output_model' not in model_args:
         model_args['output_model'] = 'Scalar'
+    if 'reduce_op' not in model_args:
+        model_args['reduce_op'] = 'add'
     model = create_model(model_args)
 
     # Setup data
