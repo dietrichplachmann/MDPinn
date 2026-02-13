@@ -60,8 +60,7 @@ def test_datamodule():
         print("Testing with MD17 aspirin...")
         data = DataModule(
             dataset='MD17',
-            dataset_root='./data',
-            dataset_arg='aspirin',  # CORRECT parameter name
+            dataset_arg='aspirin',
             batch_size=2,
             num_workers=0,  # Use 0 for debugging
             splits=[0.8, 0.1, 0.1],
@@ -194,7 +193,6 @@ def test_full_integration():
         print("Creating DataModule...")
         data = DataModule(
             dataset='MD17',
-            dataset_root='./data',
             dataset_arg='aspirin',
             batch_size=2,
             num_workers=0,
