@@ -293,10 +293,6 @@ def main():
         return 0
     else:
         print("\n❌ SOME TESTS FAILED")
-        print("\nNext steps:")
-        print("1. Check the error messages above")
-        print("2. Read DEBUGGING_GUIDE.md")
-        print("3. Use the CORRECTED training scripts")
         return 1
 
 
