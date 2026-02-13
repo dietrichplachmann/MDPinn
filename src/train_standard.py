@@ -113,6 +113,8 @@ def train_standard_model(
         model_args['derivative'] = False
     if 'atom_filter' not in model_args:
         model_args['atom_filter'] = -1
+    if 'prior_model' not in model_args:
+        model_args['prior_model'] = None
     model = create_model(model_args)
 
     # Setup data
