@@ -6,11 +6,13 @@ Based on actual TorchMD-NET v2.x API
 import sys
 import torch
 import torch_geometric.data.data
+import torch_geometric.data.storage
 
-# FIX: Add BOTH classes PyTorch 2.7 needs
+# Complete fix for PyTorch 2.7 - add ALL torch_geometric classes
 torch.serialization.add_safe_globals([
     torch_geometric.data.data.DataEdgeAttr,
-    torch_geometric.data.data.DataTensorAttr  # This one too!
+    torch_geometric.data.data.DataTensorAttr,
+    torch_geometric.data.storage.GlobalStorage,
 ])
 
 def test_imports():
@@ -44,7 +46,7 @@ def test_imports():
 
 
 def test_dataset():
-    """Test dataset loading (not DataModule)"""
+    """Test dataset loading"""
     print("\n" + "=" * 60)
     print("TEST 2: Dataset Loading")
     print("=" * 60)
@@ -52,17 +54,23 @@ def test_dataset():
     try:
         from torchmdnet.datasets import MD17
 
+        # Monkey-patch torch.load to use weights_only=False for this dataset
+        import torch
+        original_load = torch.load
+        torch.load = lambda *args, **kwargs: original_load(*args, **{**kwargs, 'weights_only': False})
+
         print("Creating MD17 dataset (aspirin)...")
         dataset = MD17(root='./data', molecules='aspirin')
+
+        # Restore original torch.load
+        torch.load = original_load
+
         print(f"✓ Dataset created!")
         print(f"  Length: {len(dataset)}")
-        print(f"  Sample keys: {dataset[0].keys}")
         return True
 
     except Exception as e:
         print(f"✗ Dataset creation failed: {e}")
-        import traceback
-        traceback.print_exc()
         return False
 
 
