@@ -51,7 +51,7 @@ fi
 
 # Install other dependencies
 echo "Installing dependencies..."
-pip install pytorch-lightning matplotlib seaborn tqdm numpy -q
+pip install pytorch-lightning matplotlib seaborn tqdm numpy -q tensorboardX tensorboard
 
 # Create directories
 echo "Creating project directories..."
