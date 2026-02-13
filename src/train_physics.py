@@ -303,7 +303,7 @@ def train_physics_informed_model(
     data = DataModule(
         dataset=dataset,
         #dataset_root='./data',
-        dataset_arg=molecule if dataset in ['MD17', 'rMD17'] else '7',
+        #dataset_arg=molecule if dataset in ['MD17', 'rMD17'] else '7',
         batch_size=batch_size,
         num_workers=4,
         splits=[0.8, 0.1, 0.1],
