@@ -125,7 +125,7 @@ def train_standard_model(
     print("Loading dataset...")
     data = DataModule(
         dataset=dataset,
-        dataset_root='./data',
+        #dataset_root='./data',
         dataset_arg=molecule if dataset in ['MD17', 'rMD17'] else '7',
         batch_size=batch_size,
         num_workers=4,
