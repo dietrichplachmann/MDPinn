@@ -3,9 +3,15 @@
 Updated Diagnostic Test Script for TorchMD-NET
 Based on actual TorchMD-NET v2.x API
 """
-
 import sys
 
+# FIX: PyTorch 2.7 compatibility
+import torch
+try:
+    import torch_geometric.data.data
+    torch.serialization.add_safe_globals([torch_geometric.data.data.DataEdgeAttr])
+except:
+    pass
 
 def test_imports():
     """Test imports"""
