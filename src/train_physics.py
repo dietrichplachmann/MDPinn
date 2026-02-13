@@ -325,7 +325,7 @@ def train_physics_informed_model(
     best_checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath=save_dir,
-        filename='best_model',
+        filename='best_model-{epoch:02d}-{val_loss:.6f}',
         save_top_k=1,
         mode='min',
     )
