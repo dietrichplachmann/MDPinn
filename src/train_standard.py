@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-Standard TorchMD-NET Training (Baseline)
-No physics-informed losses, just standard energy and force training
+CORRECTED Standard TorchMD-NET Training Script
+Fixed DataModule arguments and model_args defaults
 """
 
 import torch
@@ -27,16 +27,7 @@ def train_standard_model(
 ):
     """
     Train a standard TorchMD-NET model
-
-    Args:
-        dataset: Dataset name (MD17, rMD17, QM9)
-        molecule: Molecule name (for MD17/rMD17)
-        batch_size: Training batch size
-        num_epochs: Number of training epochs
-        lr: Learning rate
-        model_type: Model architecture (tensornet, equivariant-transformer, graph-network)
-        save_dir: Directory to save checkpoints
-        log_dir: Directory for TensorBoard logs
+    CORRECTED VERSION with proper arguments
     """
 
     # Create directories
@@ -44,20 +35,24 @@ def train_standard_model(
     Path(log_dir).mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'=' * 60}")
-    print(f"Training Standard TorchMD-NET")
+    print(f"Training Standard TorchMD-NET (CORRECTED)")
     print(f"{'=' * 60}")
     print(f"Dataset: {dataset}")
     if dataset in ['MD17', 'rMD17']:
         print(f"Molecule: {molecule}")
     print(f"Model: {model_type}")
-    print(f"Batch size: {batch_size}")
-    print(f"Epochs: {num_epochs}")
-    print(f"Learning rate: {lr}")
     print(f"{'=' * 60}\n")
 
-    # Model configuration
+    # CORRECTED Model configuration with ALL required arguments
     model_args = {
+        # Model type
         'model': model_type,
+
+        # CRITICAL - These are often missing!
+        'prior_model': None,  # No atomic reference energies
+        'output_model': 'Scalar',  # Scalar energy output
+
+        # Architecture
         'embedding_dimension': 256,
         'num_layers': 6,
         'num_rbf': 64,
@@ -66,6 +61,8 @@ def train_standard_model(
         'activation': 'silu',
         'max_z': 100,
         'max_num_neighbors': 128,
+        'aggr': 'add',
+        'neighbor_embedding': True,
 
         # Training settings
         'derivative': True,  # Train on forces
@@ -73,65 +70,64 @@ def train_standard_model(
         'lr_patience': 15,
         'lr_min': 1e-7,
         'lr_factor': 0.8,
+        'lr_warmup_steps': 0,
         'weight_decay': 0.0,
 
-        # Loss weights - standard
-        'force_weight': 0.95,
-        'energy_weight': 0.05,
+        # EMA (Exponential Moving Average) - required by some versions
+        'ema_alpha_y': 1.0,  # 1.0 = no EMA for energy
+        'ema_alpha_dy': 1.0,  # 1.0 = no EMA for forces
 
+        # Loss weights
+        'energy_weight': 0.05,
+        'force_weight': 0.95,
+
+        # Gradient clipping
         'gradient_clipping': 1000.0,
 
-        # Dataset
+        # Dataset info (sometimes required)
         'dataset': dataset,
-        'dataset_arg': molecule if dataset in ['MD17', 'rMD17'] else '7',
+        'dataset_arg': molecule if dataset in ['MD17', 'rMD17'] else 'U0',
     }
 
-    # Additional settings for specific models
+    # Model-specific additional arguments
     if model_type == 'equivariant-transformer':
         model_args.update({
             'attn_activation': 'silu',
             'num_heads': 8,
             'distance_influence': 'both',
         })
+    elif model_type == 'graph-network':
+        # Graph network specific args (if any)
+        pass
 
     # Create model
     print("Creating model...")
-    if 'precision' not in model_args:
-        model_args['precision'] = 32
-    # using defaults from documentation, this can be changed later
-    if 'cutoff_lower' not in model_args:
-        model_args['cutoff_lower'] = 0.0
-    if 'cutoff_upper' not in model_args:
-        model_args['cutoff_upper'] = 5.0
-    if 'max_z' not in model_args:
-        model_args['max_z'] = 128
-    if 'max_num_neighbors' not in model_args:
-        model_args['max_num_neighbors'] = 64
-    if 'equivariance_invariance_group' not in model_args:
-        model_args['equivariance_invariance_group'] = 'O(3)'
-    if 'derivative' not in model_args:
-        model_args['derivative'] = False
-    if 'atom_filter' not in model_args:
-        model_args['atom_filter'] = -1
-    if 'prior_model' not in model_args:
-        model_args['prior_model'] = None
-    if 'output_model' not in model_args:
-        model_args['output_model'] = 'Scalar'
-    if 'reduce_op' not in model_args:
-        model_args['reduce_op'] = 'add'
-    model = create_model(model_args)
+    try:
+        model = create_model(model_args)
+        print("✓ Model created successfully")
+    except Exception as e:
+        print(f"✗ Error creating model: {e}")
+        print("\nModel args that were used:")
+        for k, v in model_args.items():
+            print(f"  {k}: {v}")
+        raise
 
-    # Setup data
+    # CORRECTED Setup data with proper argument names
     print("Loading dataset...")
-    data = DataModule(
-        dataset=dataset,
-        dataset_root='./data',
-        dataset_arg=molecule if dataset in ['MD17', 'rMD17'] else '7',
-        batch_size=batch_size,
-        num_workers=4,
-        splits=[0.8, 0.1, 0.1],
-        seed=42
-    )
+    try:
+        data = DataModule(
+            dataset=dataset,
+            dataset_root='./data',
+            dataset_arg=molecule if dataset in ['MD17', 'rMD17'] else 'U0',  # CORRECT: dataset_arg, not molecule
+            batch_size=batch_size,
+            num_workers=4,
+            splits=[0.8, 0.1, 0.1],
+            seed=42,
+        )
+        print("✓ DataModule created successfully")
+    except Exception as e:
+        print(f"✗ Error creating DataModule: {e}")
+        raise
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(
@@ -144,11 +140,10 @@ def train_standard_model(
         save_on_train_epoch_end=False,
     )
 
-    # Save best model separately for easy access
     best_checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath=save_dir,
-        filename='best_model-{epoch:02d}-{val_loss:.6f}',
+        filename='best_model',
         save_top_k=1,
         mode='min',
     )
@@ -186,11 +181,19 @@ def train_standard_model(
     print("\nStarting training...")
     print(f"Monitor logs with: tensorboard --logdir={log_dir}\n")
 
-    trainer.fit(model, data)
+    try:
+        trainer.fit(model, data)
+    except Exception as e:
+        print(f"\n✗ Error during training: {e}")
+        raise
 
     # Test
     print("\nTesting best model...")
-    test_results = trainer.test(model, data, ckpt_path='best')
+    try:
+        test_results = trainer.test(model, data, ckpt_path='best')
+    except Exception as e:
+        print(f"Warning: Testing failed: {e}")
+        test_results = None
 
     # Save configuration
     config = {
@@ -220,13 +223,14 @@ def train_standard_model(
 if __name__ == '__main__':
     import argparse
 
-    parser = argparse.ArgumentParser(description='Train standard TorchMD-NET model')
+    parser = argparse.ArgumentParser(description='Train standard TorchMD-NET model (CORRECTED)')
     parser.add_argument('--dataset', type=str, default='MD17')
     parser.add_argument('--molecule', type=str, default='aspirin')
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=0.0001)
-    parser.add_argument('--model', type=str, default='tensornet')
+    parser.add_argument('--model', type=str, default='tensornet',
+                        choices=['tensornet', 'equivariant-transformer', 'graph-network'])
     parser.add_argument('--save-dir', type=str, default='checkpoints/standard')
     parser.add_argument('--log-dir', type=str, default='logs/standard')
 
