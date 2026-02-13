@@ -126,12 +126,12 @@ def train_standard_model(
     data = DataModule(
         hparams=[],
         dataset=dataset,
-        #dataset_root='./data',
-        #dataset_arg=molecule if dataset in ['MD17', 'rMD17'] else '7',
-        #batch_size=batch_size,
-        #num_workers=4,
-        #splits=[0.8, 0.1, 0.1],
-        #seed=42
+        dataset_root='./data',
+        dataset_arg=molecule if dataset in ['MD17', 'rMD17'] else '7',
+        batch_size=batch_size,
+        num_workers=4,
+        splits=[0.8, 0.1, 0.1],
+        seed=42
     )
 
     # Callbacks
