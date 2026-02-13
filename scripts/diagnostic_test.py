@@ -287,9 +287,6 @@ def main():
     if all(r[1] for r in results):
         print("\n🎉 ALL TESTS PASSED!")
         print("Your environment is correctly set up.")
-        print("\nYou can now run:")
-        print("  python train_standard_CORRECTED.py")
-        print("  python train_physics_informed_CORRECTED.py")
         return 0
     else:
         print("\n❌ SOME TESTS FAILED")
