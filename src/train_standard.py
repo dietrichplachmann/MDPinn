@@ -97,7 +97,7 @@ def train_standard_model(
     # Create model
     print("Creating model...")
     if 'precision' not in model_args:
-        model_args['precision'] = '32'
+        model_args['precision'] = 32
     model = create_model(model_args)
 
     # Setup data
