@@ -109,6 +109,10 @@ def train_standard_model(
         'energy_weight': 0.05,
         'force_weight': 0.95,
 
+        # EMA parameters
+        'ema_alpha_y': 1.0,
+        'ema_alpha_neg_dy': 1.0,
+
         # Required by create_model
         'atom_filter': -1,  # No atom filtering
         'reduce_op': 'add',  # Reduction operation for output

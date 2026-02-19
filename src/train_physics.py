@@ -276,6 +276,10 @@ def train_physics_informed_model(
         'energy_weight': energy_weight,
         'force_weight': force_weight,
 
+        # EMA parameters
+        'ema_alpha_y': 1.0,
+        'ema_alpha_neg_dy': 1.0,
+
         # Physics loss weights (custom)
         'momentum_weight': momentum_weight,
         'nve_weight': nve_weight,
