@@ -245,7 +245,7 @@ def train_physics_informed_model(
         # LNNP required parameters
         'load_model': None,
         'remove_ref_energy': False,
-        'train_loss': 'mse',
+        'train_loss': 'mse_loss',
         'train_loss_arg': None,
 
         # Precision and dtype

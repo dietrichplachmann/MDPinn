@@ -78,7 +78,7 @@ def train_standard_model(
         # LNNP required parameters
         'load_model': None,
         'remove_ref_energy': False,
-        'train_loss': 'mse',  # or 'mae'
+        'train_loss': 'mse_loss',  # Options: mse_loss, l1_loss, huber_loss
         'train_loss_arg': None,
 
         # Precision and dtype
