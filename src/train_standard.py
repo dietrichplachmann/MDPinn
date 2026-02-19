@@ -129,17 +129,10 @@ def train_standard_model(
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath=save_dir,
-        filename='model-{epoch:02d}-{val_loss:.6f}',
-        save_top_k=3,
-        mode='min',
-    )
-
-    best_checkpoint = ModelCheckpoint(
-        monitor='val_loss',
-        dirpath=save_dir,
         filename='best_model',
         save_top_k=1,
         mode='min',
+        save_last=True,  # Also save last epoch
     )
 
     early_stop = EarlyStopping(
@@ -156,7 +149,7 @@ def train_standard_model(
         max_epochs=num_epochs,
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
         devices=1,
-        callbacks=[checkpoint_callback, best_checkpoint, early_stop],
+        callbacks=[checkpoint_callback, early_stop],
         logger=logger,
         log_every_n_steps=10,
     )
