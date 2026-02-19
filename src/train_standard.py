@@ -9,9 +9,9 @@ import torch
 original_load = torch.load
 torch.load = lambda *args, **kwargs: original_load(*args, **{**kwargs, 'weights_only': False})
 
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-from pytorch_lightning.loggers import TensorBoardLogger
+import lightning.pytorch as pl  # Changed from pytorch_lightning
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+from lightning.pytorch.loggers import TensorBoardLogger
 from pathlib import Path
 import json
 from torch.utils.data import DataLoader, random_split
