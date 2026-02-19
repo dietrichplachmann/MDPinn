@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, random_split
 
 from torchmdnet.datasets import MD17
 from torchmdnet.models.model import create_model
+from torchmdnet.module import LNNP  # CORRECT LOCATION
 
 
 def train_standard_model(
@@ -119,8 +120,10 @@ def train_standard_model(
     # Create model
     print("Creating model...")
     try:
-        # create_model returns TorchMD_Net (Lightning module) directly
-        model = create_model(model_args)
+        # create_model returns the representation model (not Lightning)
+        # We need to wrap it in LNNP (the Lightning module)
+        representation_model = create_model(model_args)
+        model = LNNP(model_args, model=representation_model)
         print("✓ Model created")
     except Exception as e:
         print(f"✗ Model creation failed: {e}")

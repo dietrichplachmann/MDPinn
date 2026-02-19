@@ -17,7 +17,8 @@ import json
 from torch.utils.data import DataLoader, random_split
 
 from torchmdnet.datasets import MD17
-from torchmdnet.models.model import create_model, TorchMD_Net
+from torchmdnet.models.model import create_model
+from torchmdnet.module import LNNP  # CORRECT LOCATION
 
 # Import physics losses
 try:
@@ -34,7 +35,7 @@ except ImportError:
     PHYSICS_LOSSES_AVAILABLE = False
 
 
-class PhysicsInformedLNNP(TorchMD_Net):
+class PhysicsInformedLNNP(LNNP):
     """Extended LNNP with physics losses including NVE"""
 
     def __init__(self, hparams, **kwargs):
@@ -309,8 +310,9 @@ def train_physics_informed_model(
         print(f"✗ Physics-informed model creation failed: {e}")
         print("Falling back to standard model (no physics losses)...")
 
-        # Fallback: create_model returns TorchMD_Net directly
-        model = create_model(model_args)
+        # Fallback: wrap in standard LNNP
+        representation_model = create_model(model_args)
+        model = LNNP(model_args, model=representation_model)
         print("✓ Standard model created")
 
     # Callbacks
