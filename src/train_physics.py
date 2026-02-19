@@ -309,9 +309,8 @@ def train_physics_informed_model(
         print(f"✗ Physics-informed model creation failed: {e}")
         print("Falling back to standard model (no physics losses)...")
 
-        # Fallback: Create standard model wrapped in TorchMD_Net
-        base_model = create_model(model_args)
-        model = TorchMD_Net(model_args, model=base_model)
+        # Fallback: create_model returns TorchMD_Net directly
+        model = create_model(model_args)
         print("✓ Standard model created")
 
     # Callbacks
