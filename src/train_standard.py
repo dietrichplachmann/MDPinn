@@ -120,10 +120,8 @@ def train_standard_model(
     # Create model
     print("Creating model...")
     try:
-        # create_model returns the representation model (not Lightning)
-        # We need to wrap it in LNNP (the Lightning module)
-        representation_model = create_model(model_args)
-        model = LNNP(model_args, model=representation_model)
+        # LNNP creates the model internally from hparams
+        model = LNNP(model_args)
         print("✓ Model created")
     except Exception as e:
         print(f"✗ Model creation failed: {e}")
