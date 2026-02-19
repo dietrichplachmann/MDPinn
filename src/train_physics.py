@@ -259,6 +259,7 @@ def train_physics_informed_model(
         'precision': 32,
         'cutoff_lower': 0.0,
         'cutoff_upper': 5.0,
+        'equivariance_invariance_group': 'O(3)',
     }
 
     # Create model
