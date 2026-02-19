@@ -79,8 +79,10 @@ def train_standard_model(
         # LNNP required parameters
         'load_model': None,
         'remove_ref_energy': False,
-        'train_loss': 'mse_loss',  # Options: mse_loss, l1_loss, huber_loss
+        'train_loss': 'mse_loss',
         'train_loss_arg': None,
+        'charge': False,
+        'spin': False,
 
         # Precision and dtype
         'precision': 32,
@@ -105,9 +107,10 @@ def train_standard_model(
         'lr_patience': 15,
         'lr_min': 1e-7,
         'lr_factor': 0.8,
+        'lr_warmup_steps': 0,
         'weight_decay': 0.0,
-        'energy_weight': 0.05,
-        'force_weight': 0.95,
+        'y_weight': 0.05,  # Same as energy_weight
+        'neg_dy_weight': 0.95,  # Same as force_weight
 
         # EMA parameters
         'ema_alpha_y': 1.0,
