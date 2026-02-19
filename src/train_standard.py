@@ -15,6 +15,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from pathlib import Path
 import json
 from torch.utils.data import DataLoader, random_split
+from torch_geometric.loader import DataLoader as GeometricDataLoader
 
 from torchmdnet.datasets import MD17
 from torchmdnet.models.model import create_model
@@ -63,10 +64,10 @@ def train_standard_model(
 
     print(f"Split: {train_size} train, {val_size} val, {test_size} test")
 
-    # Create dataloaders
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_data, batch_size=batch_size, num_workers=4)
-    test_loader = DataLoader(test_data, batch_size=batch_size, num_workers=4)
+    # Create dataloaders - use PyTorch Geometric DataLoader for graph data
+    train_loader = GeometricDataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=4)
+    val_loader = GeometricDataLoader(val_data, batch_size=batch_size, num_workers=4)
+    test_loader = GeometricDataLoader(test_data, batch_size=batch_size, num_workers=4)
 
     # Model configuration - ALL required parameters
     model_args = {
