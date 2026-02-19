@@ -234,11 +234,21 @@ def train_physics_informed_model(
     val_loader = DataLoader(val_data, batch_size=batch_size, num_workers=4)
     test_loader = DataLoader(test_data, batch_size=batch_size, num_workers=4)
 
-    # Model configuration
+    # Model configuration - ALL required parameters
     model_args = {
+        # Model type
         'model': model_type,
         'prior_model': None,
         'output_model': 'Scalar',
+
+        # Precision and dtype
+        'precision': 32,
+
+        # Cutoffs
+        'cutoff_lower': 0.0,
+        'cutoff_upper': 5.0,
+
+        # Architecture
         'embedding_dimension': 256,
         'num_layers': 6,
         'num_rbf': 64,
@@ -247,19 +257,37 @@ def train_physics_informed_model(
         'activation': 'silu',
         'max_z': 100,
         'max_num_neighbors': 128,
+
+        # Training
         'derivative': True,
         'lr': lr,
         'energy_weight': energy_weight,
         'force_weight': force_weight,
+
+        # Physics loss weights (custom)
         'momentum_weight': momentum_weight,
         'nve_weight': nve_weight,
         'pbc_weight': pbc_weight,
         'traj_length': traj_length,
         'nve_freq': nve_freq,
-        'precision': 32,
-        'cutoff_lower': 0.0,
-        'cutoff_upper': 5.0,
+
+        # Required by create_model
+        'atom_filter': -1,
+        'reduce_op': 'add',
         'equivariance_invariance_group': 'O(3)',
+        'box_vecs': None,
+        'check_errors': True,
+        'static_shapes': False,
+        'vector_cutoff': False,
+
+        # For graph-network (if used)
+        'aggr': 'add',
+        'neighbor_embedding': True,
+
+        # For transformer models (if used)
+        'attn_activation': 'silu',
+        'num_heads': 8,
+        'distance_influence': 'both',
     }
 
     # Create model

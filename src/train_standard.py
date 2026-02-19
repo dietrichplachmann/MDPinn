@@ -67,11 +67,21 @@ def train_standard_model(
     val_loader = DataLoader(val_data, batch_size=batch_size, num_workers=4)
     test_loader = DataLoader(test_data, batch_size=batch_size, num_workers=4)
 
-    # Model configuration
+    # Model configuration - ALL required parameters
     model_args = {
+        # Model type
         'model': model_type,
         'prior_model': None,
         'output_model': 'Scalar',
+
+        # Precision and dtype
+        'precision': 32,
+
+        # Cutoffs
+        'cutoff_lower': 0.0,
+        'cutoff_upper': 5.0,
+
+        # Architecture
         'embedding_dimension': 256,
         'num_layers': 6,
         'num_rbf': 64,
@@ -80,14 +90,30 @@ def train_standard_model(
         'activation': 'silu',
         'max_z': 100,
         'max_num_neighbors': 128,
+
+        # Training
         'derivative': True,
         'lr': lr,
         'energy_weight': 0.05,
         'force_weight': 0.95,
-        'precision': 32,
-        'cutoff_lower': 0.0,
-        'cutoff_upper': 5.0,
-        'equivariance_invariance_group': 'O(3)',
+
+        # Required by create_model
+        'atom_filter': -1,  # No atom filtering
+        'reduce_op': 'add',  # Reduction operation for output
+        'equivariance_invariance_group': 'O(3)',  # For TensorNet
+        'box_vecs': None,  # No periodic box
+        'check_errors': True,
+        'static_shapes': False,
+        'vector_cutoff': False,
+
+        # For graph-network (if used)
+        'aggr': 'add',
+        'neighbor_embedding': True,
+
+        # For transformer models (if used)
+        'attn_activation': 'silu',
+        'num_heads': 8,
+        'distance_influence': 'both',
     }
 
     # Create model
