@@ -308,7 +308,10 @@ def train_physics_informed_model(
     except Exception as e:
         print(f"✗ Physics-informed model creation failed: {e}")
         print("Falling back to standard model (no physics losses)...")
-        model = create_model(model_args)
+
+        # Fallback: Create standard model wrapped in LNNP
+        base_model = create_model(model_args)
+        model = LNNP(model_args, model=base_model)
         print("✓ Standard model created")
 
     # Callbacks

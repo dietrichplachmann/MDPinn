@@ -119,7 +119,13 @@ def train_standard_model(
     # Create model
     print("Creating model...")
     try:
-        model = create_model(model_args)
+        from torchmdnet.models.model import LNNP
+
+        # Create the base model
+        base_model = create_model(model_args)
+
+        # Wrap in Lightning module
+        model = LNNP(model_args, model=base_model)
         print("✓ Model created")
     except Exception as e:
         print(f"✗ Model creation failed: {e}")
