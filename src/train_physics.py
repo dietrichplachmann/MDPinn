@@ -268,6 +268,10 @@ def train_physics_informed_model(
         # Training
         'derivative': True,
         'lr': lr,
+        'lr_patience': 15,
+        'lr_min': 1e-7,
+        'lr_factor': 0.8,
+        'weight_decay': 0.0,
         'energy_weight': energy_weight,
         'force_weight': force_weight,
 
