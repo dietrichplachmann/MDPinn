@@ -75,6 +75,9 @@ def train_standard_model(
         'prior_model': None,
         'output_model': 'Scalar',
 
+        # Loading
+        'load_model': None,  # Not loading from checkpoint
+
         # Precision and dtype
         'precision': 32,
 
