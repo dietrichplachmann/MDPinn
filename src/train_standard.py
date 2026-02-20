@@ -147,16 +147,16 @@ def train_standard_model(
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_loss',
+        monitor='val_total_mse_loss',  # LNNP uses this name
         dirpath=save_dir,
         filename='best_model',
         save_top_k=1,
         mode='min',
-        save_last=True,  # Also save last epoch
+        save_last=True,
     )
 
     early_stop = EarlyStopping(
-        monitor='val_loss',
+        monitor='val_total_mse_loss',  # LNNP uses this name
         patience=30,
         mode='min',
     )
