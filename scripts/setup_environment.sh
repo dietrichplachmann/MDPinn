@@ -53,10 +53,6 @@ fi
 echo "Installing dependencies..."
 pip install pytorch-lightning matplotlib seaborn tqdm numpy -q tensorboardX tensorboard
 
-# Create directories
-echo "Creating project directories..."
-mkdir -p data checkpoints/{standard,physics_informed} logs/{standard,physics_informed} results/plots
-
 # Test installation
 echo ""
 echo "Testing installation..."
