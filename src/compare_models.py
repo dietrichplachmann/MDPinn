@@ -140,13 +140,17 @@ def evaluate_on_dataset(model, dataset, device='cuda', batch_size=32, max_sample
         for batch in tqdm(dataloader, desc="Evaluating"):
             batch = batch.to(device)
 
-            # Forward pass
-            energy_pred, force_pred = model(batch.z, batch.pos, batch=batch.batch)
+            # Enable gradients on positions for force computation
+            batch.pos.requires_grad_(True)
+
+            # Forward pass (forces computed via autograd, not in no_grad context)
+            with torch.enable_grad():
+                energy_pred, force_pred = model(batch.z, batch.pos, batch=batch.batch)
 
             # Collect predictions and targets
-            energies_pred.append(energy_pred.cpu())
+            energies_pred.append(energy_pred.detach().cpu())
             energies_true.append(batch.y.cpu())
-            forces_pred.append(force_pred.cpu())
+            forces_pred.append(force_pred.detach().cpu())
             forces_true.append(batch.neg_dy.cpu())
 
             samples_processed += batch.num_graphs
@@ -234,12 +238,17 @@ def evaluate_energy_conservation(model, dataset, device='cuda', traj_length=100,
                 sample = dataset[start_idx + t]
                 sample = sample.to(device)
 
+                # Enable gradients for force computation
+                sample.pos.requires_grad_(True)
+
                 # Create batch tensor
                 batch = torch.zeros(sample.z.size(0), dtype=torch.long, device=device)
 
-                # Predict energy
-                energy, _ = model(sample.z, sample.pos, batch=batch)
-                energies.append(energy.item())
+                # Predict energy (with gradients enabled temporarily)
+                with torch.enable_grad():
+                    energy, _ = model(sample.z, sample.pos, batch=batch)
+
+                energies.append(energy.detach().item())
 
             # Compute drift from initial energy
             energies = np.array(energies)
