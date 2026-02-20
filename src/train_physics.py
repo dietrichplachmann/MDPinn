@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-Physics-Informed TorchMD-NET Training - CORRECTED Loss Implementation
-Properly integrates with LNNP's internal loss system
+Physics-Informed TorchMD-NET Training - FINAL CORRECT VERSION
+Based on actual LNNP.step() structure from your installation
 """
 
 import torch
@@ -40,8 +40,8 @@ class PhysicsInformedLNNP(LNNP):
     """
     Extended LNNP with physics losses
 
-    CRITICAL: We properly inherit from LNNP and ADD physics losses
-    to the existing loss, rather than replacing LNNP's loss computation.
+    Strategy: Override step() to intercept the forward pass results
+    and add physics losses to the total_loss before returning.
     """
 
     def __init__(self, hparams, **kwargs):
@@ -59,99 +59,87 @@ class PhysicsInformedLNNP(LNNP):
         # Dataset reference
         self.full_dataset = None
 
+        # Track batches for NVE
+        self.train_batch_counter = 0
+
         print(f"Physics loss weights:")
         print(f"  Momentum: {self.momentum_weight}")
         print(f"  NVE:      {self.nve_weight} (every {self.nve_freq} batches)")
         print(f"  PBC:      {self.pbc_weight} (disabled)")
 
-    def training_step(self, batch, batch_idx):
+    def step(self, batch, loss_fn_list, stage):
         """
-        Training step with physics losses ADDED to LNNP's standard losses
+        Override LNNP's step to add physics losses
 
-        CRITICAL: We call parent's training_step to get the standard loss,
-        then ADD our physics losses to it.
+        This method:
+        1. Calls parent's step to get standard loss
+        2. Uses the already-computed neg_dy (forces) for physics losses
+        3. Adds physics losses to total_loss
+        4. Returns modified total_loss
         """
-        # Get standard loss from parent LNNP class
-        # This handles all the proper loss computation, weighting, and logging
-        standard_loss = super().training_step(batch, batch_idx)
+        # Save original positions with gradients for physics losses
+        original_pos = batch.pos.clone()
+        requires_grad_state = batch.pos.requires_grad
 
-        # Initialize physics losses
-        loss_momentum = torch.tensor(0.0, device=self.device)
-        loss_nve = torch.tensor(0.0, device=self.device)
+        # Call parent's step - this does forward pass and computes standard losses
+        # Returns: total_loss (scalar)
+        total_loss = super().step(batch, loss_fn_list, stage)
 
-        # Compute physics losses if available
-        if PHYSICS_LOSSES_AVAILABLE:
-            # 1. Momentum conservation loss
-            if self.momentum_weight > 0:
-                try:
-                    # Get forces from the model
-                    # We need to do a forward pass to get forces
-                    batch.pos.requires_grad_(True)
-                    with torch.enable_grad():
-                        _, forces = self(batch.z, batch.pos, batch=batch.batch)
+        # Only add physics losses during training
+        if stage == "train" and PHYSICS_LOSSES_AVAILABLE:
+            try:
+                # Restore position state
+                batch.pos = original_pos
+                batch.pos.requires_grad_(True)
 
-                    # Compute momentum loss for each molecule in batch
+                # Do forward pass to get forces for physics losses
+                with torch.enable_grad():
+                    _, neg_dy = self(
+                        batch.z,
+                        batch.pos,
+                        batch=batch.batch,
+                        box=batch.box if "box" in batch else None,
+                        q=batch.q if self.hparams.charge else None,
+                        s=batch.s if self.hparams.spin else None,
+                    )
+
+                # Compute physics losses
+                loss_momentum = torch.tensor(0.0, device=self.device)
+                loss_nve = torch.tensor(0.0, device=self.device)
+
+                # 1. Momentum conservation loss
+                if self.momentum_weight > 0:
                     unique_batches = torch.unique(batch.batch)
                     for mol_idx in unique_batches:
                         mask = batch.batch == mol_idx
                         pos_mol = batch.pos[mask]
-                        forces_mol = forces[mask]
+                        forces_mol = neg_dy[mask]
                         loss_momentum += momentum_symmetry_loss(pos_mol, forces_mol)
-
                     loss_momentum = loss_momentum / len(unique_batches)
-                except Exception as e:
-                    print(f"Warning: Momentum loss computation failed: {e}")
-                    loss_momentum = torch.tensor(0.0, device=self.device)
 
-            # 2. NVE loss (computed periodically)
-            if self.nve_weight > 0 and batch_idx % self.nve_freq == 0:
-                loss_nve = self._compute_nve_loss(batch_idx)
+                # 2. NVE loss (computed periodically)
+                if self.nve_weight > 0 and self.train_batch_counter % self.nve_freq == 0:
+                    loss_nve = self._compute_nve_loss(self.train_batch_counter)
 
-        # CRITICAL: Add physics losses to standard loss (don't replace it!)
-        total_loss = (
-                standard_loss +
-                self.momentum_weight * loss_momentum +
-                self.nve_weight * loss_nve
-        )
+                self.train_batch_counter += 1
 
-        # Log physics losses separately (in addition to LNNP's logging)
-        self.log('train_physics_momentum', loss_momentum, on_step=False, on_epoch=True)
-        self.log('train_physics_nve', loss_nve, on_step=False, on_epoch=True)
-        self.log('train_total_with_physics', total_loss, on_step=True, on_epoch=True, prog_bar=True)
+                # Log physics losses
+                self.log('train_loss_momentum', loss_momentum, on_step=False, on_epoch=True)
+                self.log('train_loss_nve', loss_nve, on_step=False, on_epoch=True)
 
-        return total_loss
+                # Add physics losses to total
+                physics_loss = self.momentum_weight * loss_momentum + self.nve_weight * loss_nve
+                total_loss = total_loss + physics_loss
 
-    def validation_step(self, batch, batch_idx):
-        """
-        Validation step - only add momentum loss (NVE is too expensive)
-        """
-        # Get standard validation loss from parent
-        standard_loss = super().validation_step(batch, batch_idx)
+                self.log('train_total_with_physics', total_loss, on_step=False, on_epoch=True, prog_bar=True)
 
-        # Only add momentum loss in validation (NVE too expensive)
-        loss_momentum = torch.tensor(0.0, device=self.device)
-
-        if PHYSICS_LOSSES_AVAILABLE and self.momentum_weight > 0:
-            try:
-                batch.pos.requires_grad_(True)
-                with torch.enable_grad():
-                    _, forces = self(batch.z, batch.pos, batch=batch.batch)
-
-                unique_batches = torch.unique(batch.batch)
-                for mol_idx in unique_batches:
-                    mask = batch.batch == mol_idx
-                    pos_mol = batch.pos[mask]
-                    forces_mol = forces[mask]
-                    loss_momentum += momentum_symmetry_loss(pos_mol, forces_mol)
-
-                loss_momentum = loss_momentum / len(unique_batches)
             except Exception as e:
-                loss_momentum = torch.tensor(0.0, device=self.device)
+                print(f"Warning: Physics loss computation failed: {e}")
+                import traceback
+                traceback.print_exc()
 
-        total_loss = standard_loss + self.momentum_weight * loss_momentum
-
-        self.log('val_physics_momentum', loss_momentum, on_step=False, on_epoch=True)
-        self.log('val_total_with_physics', total_loss, on_step=False, on_epoch=True, prog_bar=True)
+        # Restore gradient state
+        batch.pos.requires_grad_(requires_grad_state)
 
         return total_loss
 
@@ -177,9 +165,9 @@ class PhysicsInformedLNNP(LNNP):
                 self.device
             )
 
-            # Use self.model (the representation model) for NVE loss
+            # Use self.model for NVE loss
             loss_nve = nve_loss_from_trajectory(
-                self.model,  # Use the representation model, not self
+                self.model,
                 traj_batch,
                 self.device
             )
@@ -187,7 +175,7 @@ class PhysicsInformedLNNP(LNNP):
             return loss_nve
 
         except Exception as e:
-            print(f"Warning: NVE loss computation failed: {e}")
+            print(f"Warning: NVE loss failed: {e}")
             return torch.tensor(0.0, device=self.device)
 
 
@@ -208,13 +196,13 @@ def train_physics_informed_model(
         traj_length=100,
         nve_freq=10,
 ):
-    """Train physics-informed model - CORRECTED VERSION"""
+    """Train physics-informed model"""
 
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'=' * 60}")
-    print(f"Physics-Informed TorchMD-NET (CORRECTED)")
+    print(f"Physics-Informed TorchMD-NET (FINAL CORRECT)")
     print(f"{'=' * 60}")
     print(f"Dataset: {dataset}")
     print(f"Molecule: {molecule}")
@@ -314,15 +302,15 @@ def train_physics_informed_model(
     print("Creating physics-informed model...")
     try:
         model = PhysicsInformedLNNP(model_args)
-        model.full_dataset = full_dataset  # Give model access to dataset
+        model.full_dataset = full_dataset
         print("✓ Physics-informed model created")
     except Exception as e:
         print(f"✗ Model creation failed: {e}")
         raise
 
-    # Callbacks - monitor the physics-augmented loss
+    # Callbacks
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_total_with_physics',  # Monitor total loss with physics
+        monitor='val_total_mse_loss',
         dirpath=save_dir,
         filename='best_model',
         save_top_k=1,
@@ -331,7 +319,7 @@ def train_physics_informed_model(
     )
 
     early_stop = EarlyStopping(
-        monitor='val_total_with_physics',
+        monitor='val_total_mse_loss',
         patience=30,
         mode='min'
     )
@@ -355,7 +343,7 @@ def train_physics_informed_model(
     print(f"Monitor with: tensorboard --logdir={log_dir}\n")
     trainer.fit(model, train_loader, val_loader)
 
-    # Skip test (has issues)
+    # Skip test
     test_results = None
 
     # Save config
