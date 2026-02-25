@@ -23,7 +23,7 @@ from torchmdnet.module import LNNP
 
 # Import physics losses
 try:
-    from physics_losses_COMPLETE import (
+    from physics_losses import (
         momentum_symmetry_loss,
         nve_loss_from_trajectory,
         build_trajectory_batch,
@@ -49,7 +49,7 @@ class PhysicsInformedLNNP(LNNP):
 
         # Physics loss weights
         self.momentum_weight = hparams.get('momentum_weight', 0.01)
-        self.nve_weight = hparams.get('nve_weight', 1.0)
+        self.nve_weight = hparams.get('nve_weight', 0.01)
         self.pbc_weight = hparams.get('pbc_weight', 0.0)
 
         # NVE parameters
@@ -191,7 +191,7 @@ def train_physics_informed_model(
         force_weight=0.95,
         energy_weight=0.05,
         momentum_weight=0.01,
-        nve_weight=1.0,
+        nve_weight=0.01,
         pbc_weight=0.0,
         traj_length=100,
         nve_freq=10,
