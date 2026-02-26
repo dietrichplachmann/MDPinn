@@ -227,9 +227,8 @@ class PhysicsInformedLNNP(LNNP):
                 self.device
             )
 
-            # Use self.model for NVE loss
             loss_nve = nve_loss_from_trajectory(
-                self.model,
+                self,
                 traj_batch,
                 self.device
             )
