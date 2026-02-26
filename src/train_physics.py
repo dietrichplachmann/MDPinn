@@ -21,6 +21,8 @@ from torch_geometric.loader import DataLoader as GeometricDataLoader
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
+import time
+
 # Import physics losses
 try:
     from physics_losses import (
@@ -68,6 +70,72 @@ class PhysicsInformedLNNP(LNNP):
         print(f"  PBC:      {self.pbc_weight} (disabled)")
 
     def step(self, batch, loss_fn_list, stage):
+
+        start = time.time()
+
+        # Save original positions
+        original_pos = batch.pos.clone()
+        requires_grad_state = batch.pos.requires_grad
+
+        # Parent's step
+        t1 = time.time()
+        total_loss = super().step(batch, loss_fn_list, stage)
+        t2 = time.time()
+
+        # Only add physics losses during training
+        if stage == "train" and PHYSICS_LOSSES_AVAILABLE:
+            try:
+                batch.pos = original_pos
+                batch.pos.requires_grad_(True)
+
+                # Physics forward pass
+                t3 = time.time()
+                with torch.enable_grad():
+                    _, neg_dy = self(...)
+                t4 = time.time()
+
+                loss_momentum = torch.tensor(0.0, device=self.device)
+                loss_nve = torch.tensor(0.0, device=self.device)
+
+                # Momentum loss
+                t5 = time.time()
+                if self.momentum_weight > 0:
+                    unique_batches = torch.unique(batch.batch)
+                    for mol_idx in unique_batches:
+                        mask = batch.batch == mol_idx
+                        pos_mol = batch.pos[mask]
+                        forces_mol = neg_dy[mask]
+                        loss_momentum += momentum_symmetry_loss(pos_mol, forces_mol)
+                    loss_momentum = loss_momentum / len(unique_batches)
+                t6 = time.time()
+
+                # NVE loss
+                t7 = time.time()
+                if self.nve_weight > 0 and self.train_batch_counter % self.nve_freq == 0:
+                    loss_nve = self._compute_nve_loss(self.train_batch_counter)
+                t8 = time.time()
+
+                self.train_batch_counter += 1
+
+                # PRINT TIMING (only occasionally)
+                if self.train_batch_counter % 100 == 0:
+                    print(f"\nTiming batch {self.train_batch_counter}:")
+                    print(f"  Parent step: {t2 - t1:.3f}s")
+                    print(f"  Physics forward: {t4 - t3:.3f}s")
+                    print(f"  Momentum: {t6 - t5:.3f}s")
+                    print(f"  NVE: {t8 - t7:.3f}s")
+                    print(f"  Total: {time.time() - start:.3f}s")
+            except Exception as e:
+                print(f"Warning: Physics loss computation failed: {e}")
+                import traceback
+                traceback.print_exc()
+
+                # Restore gradient state
+            batch.pos.requires_grad_(requires_grad_state)
+
+        return total_loss
+
+    '''def step(self, batch, loss_fn_list, stage):
         """
         Override LNNP's step to add physics losses
 
@@ -141,7 +209,7 @@ class PhysicsInformedLNNP(LNNP):
         # Restore gradient state
         batch.pos.requires_grad_(requires_grad_state)
 
-        return total_loss
+        return total_loss'''
 
     def _compute_nve_loss(self, batch_idx):
         """Compute NVE loss from trajectory"""
