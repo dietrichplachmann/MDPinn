@@ -36,8 +36,9 @@ def momentum_symmetry_loss(R, F_pred):
     F_sum = F_pred.sum(dim=0)  # (3,)
     linear_term = (F_sum ** 2).sum() / N  # Normalize by N
 
-    # Angular momentum (total torque about origin should be zero)
-    torque_i = torch.cross(R, F_pred, dim=1)  # (N, 3)
+    R_centered = R - R.mean(dim=0, keepdim=True)
+    torque_i = torch.cross(R_centered, F_pred, dim=1)
+    #torque_i = torch.cross(R, F_pred, dim=1)  # (N, 3)
     T_sum = torque_i.sum(dim=0)  # (3,)
     angular_term = (T_sum ** 2).sum() / N  # Normalize by N
 

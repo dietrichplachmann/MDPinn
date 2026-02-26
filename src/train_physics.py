@@ -41,9 +41,6 @@ except ImportError:
 class PhysicsInformedLNNP(LNNP):
     """
     Extended LNNP with physics losses
-
-    Strategy: Override step() to intercept the forward pass results
-    and add physics losses to the total_loss before returning.
     """
 
     def __init__(self, hparams, **kwargs):
@@ -64,76 +61,20 @@ class PhysicsInformedLNNP(LNNP):
         # Track batches for NVE
         self.train_batch_counter = 0
 
+        self._cached_neg_dy = None
+
         print(f"Physics loss weights:")
         print(f"  Momentum: {self.momentum_weight}")
         print(f"  NVE:      {self.nve_weight} (every {self.nve_freq} batches)")
         print(f"  PBC:      {self.pbc_weight} (disabled)")
 
-    def step(self, batch, loss_fn_list, stage):
+    def forward(self, *args, **kwargs):
+        y, neg_dy = super().forward(*args, **kwargs)
 
-        start = time.time()
+        # Cache forces for reuse inside step()
+        self._cached_neg_dy = neg_dy
 
-        # Save original positions
-        original_pos = batch.pos.clone()
-        requires_grad_state = batch.pos.requires_grad
-
-        # Parent's step
-        t1 = time.time()
-        total_loss = super().step(batch, loss_fn_list, stage)
-        t2 = time.time()
-
-        # Only add physics losses during training
-        if stage == "train" and PHYSICS_LOSSES_AVAILABLE:
-            try:
-                batch.pos = original_pos
-                batch.pos.requires_grad_(True)
-
-                # Physics forward pass
-                t3 = time.time()
-                with torch.enable_grad():
-                    _, neg_dy = self(...)
-                t4 = time.time()
-
-                loss_momentum = torch.tensor(0.0, device=self.device)
-                loss_nve = torch.tensor(0.0, device=self.device)
-
-                # Momentum loss
-                t5 = time.time()
-                if self.momentum_weight > 0:
-                    unique_batches = torch.unique(batch.batch)
-                    for mol_idx in unique_batches:
-                        mask = batch.batch == mol_idx
-                        pos_mol = batch.pos[mask]
-                        forces_mol = neg_dy[mask]
-                        loss_momentum += momentum_symmetry_loss(pos_mol, forces_mol)
-                    loss_momentum = loss_momentum / len(unique_batches)
-                t6 = time.time()
-
-                # NVE loss
-                t7 = time.time()
-                if self.nve_weight > 0 and self.train_batch_counter % self.nve_freq == 0:
-                    loss_nve = self._compute_nve_loss(self.train_batch_counter)
-                t8 = time.time()
-
-                self.train_batch_counter += 1
-
-                # PRINT TIMING (only occasionally)
-                if self.train_batch_counter % 100 == 0:
-                    print(f"\nTiming batch {self.train_batch_counter}:")
-                    print(f"  Parent step: {t2 - t1:.3f}s")
-                    print(f"  Physics forward: {t4 - t3:.3f}s")
-                    print(f"  Momentum: {t6 - t5:.3f}s")
-                    print(f"  NVE: {t8 - t7:.3f}s")
-                    print(f"  Total: {time.time() - start:.3f}s")
-            except Exception as e:
-                print(f"Warning: Physics loss computation failed: {e}")
-                import traceback
-                traceback.print_exc()
-
-                # Restore gradient state
-            batch.pos.requires_grad_(requires_grad_state)
-
-        return total_loss
+        return y, neg_dy
 
     '''def step(self, batch, loss_fn_list, stage):
         """
@@ -210,6 +151,59 @@ class PhysicsInformedLNNP(LNNP):
         batch.pos.requires_grad_(requires_grad_state)
 
         return total_loss'''
+
+    def step(self, batch, loss_fn_list, stage):
+        # Clear cache for this step
+        self._cached_neg_dy = None
+
+        # This will run forward internally (and now caches neg_dy via forward())
+        total_loss = super().step(batch, loss_fn_list, stage)
+
+        if stage == "train" and PHYSICS_LOSSES_AVAILABLE:
+            neg_dy = self._cached_neg_dy
+
+            # Safety fallback (should rarely happen). If it does, you can either:
+            # (a) skip physics this step, or (b) do the slow recompute.
+            if neg_dy is None:
+                # safest for speed: skip physics for this step
+                # return total_loss
+                #
+                # safest for identical behavior: recompute (old behavior)
+                '''with torch.enable_grad():
+                    _, neg_dy = self(
+                        batch.z,
+                        batch.pos,
+                        batch=batch.batch,
+                        box=batch.box if "box" in batch else None,
+                        q=batch.q if self.hparams.charge else None,
+                        s=batch.s if self.hparams.spin else None,
+                    )'''
+                neg_dy = self._cached_neg_dy
+                if neg_dy is None:
+                    raise RuntimeError("neg_dy was not cached — forward() did not run as expected.")
+
+            # --- your physics losses exactly as before, using neg_dy ---
+            loss_momentum = torch.tensor(0.0, device=self.device)
+            loss_nve = torch.tensor(0.0, device=self.device)
+
+            if self.momentum_weight > 0:
+                unique_batches = torch.unique(batch.batch)
+                for mol_idx in unique_batches:
+                    mask = batch.batch == mol_idx
+                    pos_mol = batch.pos[mask]
+                    forces_mol = neg_dy[mask]
+                    loss_momentum += momentum_symmetry_loss(pos_mol, forces_mol)
+                loss_momentum = loss_momentum / len(unique_batches)
+
+            if self.nve_weight > 0 and self.train_batch_counter % self.nve_freq == 0:
+                loss_nve = self._compute_nve_loss(self.train_batch_counter)
+
+            self.train_batch_counter += 1
+
+            physics_loss = self.momentum_weight * loss_momentum + self.nve_weight * loss_nve
+            total_loss = total_loss + physics_loss
+
+        return total_loss
 
     def _compute_nve_loss(self, batch_idx):
         """Compute NVE loss from trajectory"""
@@ -450,8 +444,8 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.0001)
     parser.add_argument('--momentum-weight', type=float, default=0.01)
     parser.add_argument('--nve-weight', type=float, default=0.01)
-    parser.add_argument('--traj-length', type=int, default=100)
-    parser.add_argument('--nve-freq', type=int, default=10)
+    parser.add_argument('--traj-length', type=int, default=20)
+    parser.add_argument('--nve-freq', type=int, default=200)
 
     args = parser.parse_args()
 
