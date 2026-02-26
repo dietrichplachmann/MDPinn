@@ -381,7 +381,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=0.0001)
     parser.add_argument('--momentum-weight', type=float, default=0.01)
-    parser.add_argument('--nve-weight', type=float, default=1.0)
+    parser.add_argument('--nve-weight', type=float, default=0.01)
     parser.add_argument('--traj-length', type=int, default=100)
     parser.add_argument('--nve-freq', type=int, default=10)
 
