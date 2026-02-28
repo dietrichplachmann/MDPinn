@@ -80,29 +80,31 @@ def load_lnnp_from_ckpt(ckpt_path: str, device: str) -> LNNP:
     return model
 
 
-@torch.no_grad()
 def model_energy_forces(model: LNNP, z: torch.Tensor, pos: torch.Tensor, device: str):
     """
     Returns:
-      U: scalar tensor (eV)
-      F: (N,3) tensor (eV/Å)
+      U: scalar tensor (eV) detached
+      F: (N,3) tensor (eV/Å) detached
     """
     n = z.shape[0]
     batch = torch.zeros(n, dtype=torch.long, device=device)
-    out = model(z, pos, batch=batch)
 
-    # TorchMD-Net returns (y, neg_dy) when derivative=True
-    if isinstance(out, tuple) and len(out) >= 2:
-        y, neg_dy = out[0], out[1]
-    else:
-        y, neg_dy = out, None
+    # Need grads ON for forces (dE/dx), but we detach outputs so we don't keep graphs.
+    with torch.enable_grad():
+        pos_req = pos.detach().clone().requires_grad_(True)
+        out = model(z, pos_req, batch=batch)
 
-    if neg_dy is None:
-        raise RuntimeError("Model did not return forces (neg_dy). Ensure derivative=True in the trained checkpoint.")
+        if isinstance(out, tuple) and len(out) >= 2:
+            y, neg_dy = out[0], out[1]
+        else:
+            y, neg_dy = out, None
 
-    # y can be shape (1,1) or (1,) depending on config
-    U = y.squeeze()
-    F = neg_dy
+        if neg_dy is None:
+            raise RuntimeError("Model did not return forces (neg_dy). Ensure derivative=True in the checkpoint.")
+
+        U = y.squeeze().detach()
+        F = neg_dy.detach()
+
     return U, F
 
 
