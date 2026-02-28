@@ -219,6 +219,7 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--out", type=str, default=None, help="Optional JSON output path")
+    ap.add_argument("--frame-dt", type=float, default=0.5, help="Time spacing between consecutive dataset frames (fs)")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -288,7 +289,7 @@ def main():
         masses = get_atomic_masses(z).to(device)
 
         # initial velocity from finite diff
-        v0 = (x1 - x0) / args.dt  # Å/fs
+        v0 = (x1 - x0) / args.frame_dt  # Å/fs
 
         out = velocity_verlet_rollout(
             model=model,
