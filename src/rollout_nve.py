@@ -37,6 +37,9 @@ FORCE_TO_ACCEL = 0.009648533  # (eV/Å)/amu -> Å/fs^2
 #   1 amu * (Å/fs)^2 = 0.01036427 eV  (same constant used in your physics_losses.py)
 AMU_A2_FS2_TO_EV = 0.01036427
 
+# Boltzmann constant in eV/K
+K_BOLTZMANN_EV_PER_K = 8.617333262e-5
+
 
 ATOMIC_MASSES = {
     1: 1.00784,   # H
@@ -116,6 +119,30 @@ def kinetic_energy(masses_amu: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """
     v2 = (v * v).sum(dim=-1)  # (N,)
     return 0.5 * AMU_A2_FS2_TO_EV * (masses_amu * v2).sum()
+
+
+
+def remove_com_velocity(v: torch.Tensor, masses_amu: torch.Tensor) -> torch.Tensor:
+    """Remove center-of-mass velocity so total linear momentum is ~0."""
+    m = masses_amu.view(-1, 1).to(v.device)
+    v_cm = (m * v).sum(dim=0, keepdim=True) / m.sum()
+    return v - v_cm
+
+
+def sample_maxwell_boltzmann_velocities(masses_amu: torch.Tensor, temperature_k: float, device: str) -> torch.Tensor:
+    """
+    Sample per-atom velocities from Maxwell–Boltzmann distribution.
+    Returns v in Å/fs.
+
+    For each Cartesian component:
+      0.5 * m * v^2 * (AMU_A2_FS2_TO_EV) = 0.5 * kB * T
+      => var(v) = kB*T / (m*AMU_A2_FS2_TO_EV)
+    """
+    m = masses_amu.to(device).float().view(-1, 1)  # (N,1)
+    var = (K_BOLTZMANN_EV_PER_K * float(temperature_k)) / (m * AMU_A2_FS2_TO_EV)  # (N,1) (Å/fs)^2
+    std = torch.sqrt(var).expand(-1, 3)  # (N,3)
+    v = torch.randn((m.shape[0], 3), device=device) * std
+    return remove_com_velocity(v, masses_amu.to(device))
 
 
 def velocity_verlet_rollout(
@@ -219,7 +246,6 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--out", type=str, default=None, help="Optional JSON output path")
-    ap.add_argument("--frame-dt", type=float, default=0.5, help="Time spacing between consecutive dataset frames (fs)")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -265,6 +291,10 @@ def main():
         "molecule": args.molecule,
         "steps": args.steps,
         "dt_fs": args.dt,
+        "frame_dt_fs": args.frame_dt,
+        "init_vel": args.init_vel,
+        "temp_K": args.temp,
+        "vel_scale": args.vel_scale,
         "n_rollouts": args.n_rollouts,
         "energy_log_stride": args.energy_log_stride,
         "seed": args.seed,
@@ -289,7 +319,7 @@ def main():
         masses = get_atomic_masses(z).to(device)
 
         # initial velocity from finite diff
-        v0 = (x1 - x0) / args.frame_dt  # Å/fs
+        v0 = (x1 - x0) / args.dt  # Å/fs
 
         out = velocity_verlet_rollout(
             model=model,
