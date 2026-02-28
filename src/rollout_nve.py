@@ -240,7 +240,12 @@ def main():
     ap.add_argument("--molecule", type=str, default="aspirin")
     ap.add_argument("--data-root", type=str, default="./data")
     ap.add_argument("--steps", type=int, default=20000)
-    ap.add_argument("--dt", type=float, default=0.5, help="fs")
+    ap.add_argument("--dt", type=float, default=0.5, help="fs (integrator timestep)")
+    ap.add_argument("--frame-dt", type=float, default=0.5, help="fs (dataset frame spacing for finite-diff velocities)")
+    ap.add_argument("--init-vel", type=str, default="mb", choices=["dataset", "zero", "mb"],
+                    help="Initial velocity mode: dataset (finite diff), zero, mb (Maxwell–Boltzmann)")
+    ap.add_argument("--temp", type=float, default=300.0, help="K (for --init-vel mb)")
+    ap.add_argument("--vel-scale", type=float, default=1.0, help="Scale applied to dataset finite-diff velocities")
     ap.add_argument("--n-rollouts", type=int, default=20)
     ap.add_argument("--energy-log-stride", type=int, default=10)
     ap.add_argument("--seed", type=int, default=42)
@@ -318,8 +323,14 @@ def main():
 
         masses = get_atomic_masses(z).to(device)
 
-        # initial velocity from finite diff
-        v0 = (x1 - x0) / args.dt  # Å/fs
+        # initial velocity
+        if args.init_vel == "dataset":
+            v0 = ((x1 - x0) / args.frame_dt) * float(args.vel_scale)  # Å/fs
+            v0 = remove_com_velocity(v0, masses)
+        elif args.init_vel == "zero":
+            v0 = torch.zeros_like(x0)
+        else:  # "mb"
+            v0 = sample_maxwell_boltzmann_velocities(masses, args.temp, device=device)
 
         out = velocity_verlet_rollout(
             model=model,
