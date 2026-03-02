@@ -2,7 +2,6 @@
 """
 Main Runner Script for TorchMD-NET Training
 Supports both standard and physics-informed training modes
-Test
 """
 
 import os
