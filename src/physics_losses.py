@@ -2,6 +2,11 @@
 """
 Physics-Informed Loss Functions for TorchMD-NET - FULLY CORRECTED
 All losses properly normalized and scaled
+
+These losses are meant to be soft physical priors:
+- They do NOT replace reference supervision.
+- They bias the fitted surface toward physically plausible dynamics between
+  data points.
 """
 
 import torch
@@ -19,9 +24,14 @@ def momentum_symmetry_loss(R, F_pred):
 
     CRITICAL: Normalized by N to scale properly with other losses
 
-    This ensures:
+    This encourages:
     - Linear momentum conservation: sum of forces = 0
     - Angular momentum conservation: sum of torques = 0
+
+    Chemist intuition:
+    - If your model predicts a net force on an isolated molecule, it implies
+      spurious center-of-mass acceleration.
+    - If it predicts net torque without cause, it implies spurious rotation.
 
     Args:
         R: (N, 3) atomic positions
@@ -51,7 +61,11 @@ def momentum_symmetry_loss(R, F_pred):
 
 def build_trajectory_batch(dataset, start_idx, traj_length, device):
     """
-    Build a trajectory batch from consecutive MD17 frames
+    Build a trajectory batch from consecutive MD17 frames.
+
+    Chemist intuition:
+    - This samples a local "movie strip" of configurations that should lie on
+      a physically smooth potential landscape.
 
     Args:
         dataset: MD17 dataset object
@@ -90,10 +104,11 @@ def nve_loss_from_trajectory(model, traj_batch, device, dt=0.5):
     """
     NVE (energy conservation) loss for trajectory data
 
-    Penalizes drift in predicted energy along a trajectory:
+    Penalizes drift in predicted potential energy along a trajectory:
         L_NVE = mean((E_pred(t) - E_pred(0))^2)
 
-    This enforces that total energy should remain constant in NVE ensemble.
+    This is a proxy for NVE consistency.
+    (Strict NVE uses total energy K+U; this variant constrains U drift only.)
 
     CRITICAL: Returns loss scaled appropriately for trajectory length
 
@@ -150,6 +165,8 @@ def nve_loss_with_kinetic_energy(model, traj_batch, device, masses, dt=0.5):
     Full NVE loss including kinetic energy:
         E_total = K + U_pred
         L_NVE = mean((E_total(t) - E_total(0))^2)
+
+    This is closer to textbook MD diagnostics than potential-only drift.
 
     This is more physically accurate but requires computing velocities
     from positions via finite differences.

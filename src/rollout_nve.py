@@ -5,6 +5,11 @@ NVE rollout evaluation for trained checkpoints.
 Delta-learning consistency rule implemented here:
 - If checkpoint stores delta metadata, dynamics use hybrid quantities
   U_hyb = U_ref + DeltaU and F_hyb = F_ref + DeltaF.
+
+Chemist view:
+- This file tests whether learned forces produce stable trajectories when
+  integrated forward in time.
+- If energy drift explodes quickly, the learned potential is not yet robust for MD.
 """
 
 import argparse
@@ -27,6 +32,8 @@ torch.load = lambda *args, **kwargs: _original_load(*args, **{**kwargs, "weights
 
 FORCE_TO_ACCEL = 0.009648533
 AMU_A2_FS2_TO_EV = 0.01036427
+# FORCE_TO_ACCEL converts force units (eV/A)/amu to acceleration A/fs^2.
+# AMU_A2_FS2_TO_EV converts kinetic term m*v^2 to eV.
 
 ATOMIC_MASSES = {
     1: 1.00784,
@@ -76,7 +83,12 @@ def load_lnnp_from_ckpt(ckpt_path: str, device: str) -> LNNP:
 
 @torch.no_grad()
 def model_energy_forces(model: LNNP, z: torch.Tensor, pos: torch.Tensor, device: str):
-    """Predict absolute potential energy and forces for current coordinates."""
+    """Predict absolute potential energy and forces for current coordinates.
+
+    Returned outputs are always intended for physical integration:
+    - U_abs(R): scalar potential energy used for reporting drift
+    - F_abs(R): force vectors used in velocity Verlet updates
+    """
     n = z.shape[0]
     batch = torch.zeros(n, dtype=torch.long, device=device)
     out = model(z, pos, batch=batch)
@@ -90,6 +102,8 @@ def model_energy_forces(model: LNNP, z: torch.Tensor, pos: torch.Tensor, device:
         raise RuntimeError("Model did not return forces (neg_dy). Ensure derivative=True in checkpoint.")
 
     # Convert from residual predictions to absolute if checkpoint is delta-trained.
+    # This enforces physically consistent hybrid dynamics in rollout:
+    #   F_hyb = F_ref + DeltaF_NN
     if getattr(model, "_delta_learning", False):
         u_ref, f_ref = lj_energy_forces_batched(
             z=z,
@@ -122,7 +136,14 @@ def velocity_verlet_rollout(
     device: str,
     energy_log_stride: int = 10,
 ):
-    """Run one NVE rollout and return logged energies/drift statistics."""
+    """Run one NVE rollout and return logged energies/drift statistics.
+
+    Integrator reminder:
+    - half-step velocity update
+    - full-step position update
+    - force recompute
+    - second half-step velocity update
+    """
     x = x0.clone()
     v = v0.clone()
 
@@ -152,6 +173,7 @@ def velocity_verlet_rollout(
         v_half = v + 0.5 * dt_fs * a
         x = x + dt_fs * v_half
 
+        # Quick hard-failure detection to stop obviously unstable rollouts.
         if torch.isnan(x).any() or torch.isinf(x).any() or x.abs().max().item() > 1e4:
             failed = True
             fail_reason = "position_numerical_blowup"
@@ -163,6 +185,8 @@ def velocity_verlet_rollout(
         a = a_new
 
         if step % energy_log_stride == 0 or step == steps:
+            # Track instantaneous drift relative to step-0 energy.
+            # For ideal NVE and perfect numerics this would stay near 0.
             K = kinetic_energy(masses_amu, v)
             E = K + U
             drift = E - E0

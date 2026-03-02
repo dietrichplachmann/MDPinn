@@ -5,6 +5,13 @@ Standard TorchMD-NET training with optional delta-learning.
 Core idea:
 - Absolute mode: network learns total energy/forces directly.
 - Delta mode: network learns correction terms relative to an analytic baseline.
+
+Chemist view:
+- Absolute mode asks the NN to approximate the whole PES in one shot.
+- Delta mode says: "start from a physically motivated baseline U_ref, then learn
+  only the residual chemistry DeltaU that baseline misses."
+- Forces always come from gradients of the learned scalar energy, so the model
+  remains conservative by construction.
 """
 
 import json
@@ -46,13 +53,22 @@ class DeltaLNNP(LNNP):
         self.baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))
 
     def data_transform(self, batch):
-        """Run base transform first, then residualize labels when enabled."""
+        """Run base transform first, then residualize labels when enabled.
+
+        Why this hook matters:
+        - TorchMD-Net/LNNP computes losses against `batch.y` and `batch.neg_dy`.
+        - By rewriting those labels here, we can train the same architecture
+          either on absolute targets or residual targets without rewriting
+          the downstream Lightning training loop.
+        """
         batch = super().data_transform(batch)
 
         if not self.delta_learning:
             return batch
 
         # Compute baseline on current coordinates.
+        # Physically: this is the part of the force field we choose to keep
+        # analytic and interpretable.
         U_ref, F_ref = lj_energy_forces_batched(
             z=batch.z,
             pos=batch.pos,
@@ -63,6 +79,9 @@ class DeltaLNNP(LNNP):
         )
 
         # Energies are per-graph.
+        # y_true is reference total potential for each molecular graph.
+        # In delta mode we train on residual energy:
+        #   DeltaE_target = E_true - E_ref
         if hasattr(batch, "y") and batch.y is not None:
             y = batch.y
             if y.ndim == 1:
@@ -70,6 +89,8 @@ class DeltaLNNP(LNNP):
             batch.y = (y.squeeze(-1) - U_ref).unsqueeze(1)
 
         # Forces are per-atom.
+        # Same idea for forces:
+        #   DeltaF_target = F_true - F_ref
         if hasattr(batch, "neg_dy") and batch.neg_dy is not None:
             batch.neg_dy = batch.neg_dy - F_ref
 
@@ -90,7 +111,16 @@ def train_standard_model(
     baseline_sigma_A=1.0,
     baseline_cutoff_A=5.0,
 ):
-    """Train standard model and optionally residualize targets for delta-learning."""
+    """Train standard model and optionally residualize targets for delta-learning.
+
+    Data flow summary:
+    1) Load MD17 snapshots (R, Z, E*, F*).
+    2) Build train/val/test split.
+    3) In delta mode, transform labels to (E* - E_ref, F* - F_ref).
+    4) Fit NN on those targets.
+    5) Save checkpoint containing the delta/baseline metadata so inference code
+       can reconstruct absolute energies/forces later.
+    """
 
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
@@ -120,6 +150,9 @@ def train_standard_model(
     test_loader = GeometricDataLoader(test_data, batch_size=batch_size, num_workers=4)
 
     # Include delta settings in checkpoint hyperparameters for reproducible inference.
+    # This is essential because evaluation/rollout must know whether to do:
+    #   U_abs = U_model                      (absolute mode)
+    #   U_abs = U_ref + U_model (DeltaU)     (delta mode)
     model_args = {
         "delta_learning": bool(delta_learning),
         "baseline_epsilon_eV": float(baseline_epsilon_eV),
@@ -171,6 +204,8 @@ def train_standard_model(
     }
 
     print("Creating model...")
+    # In delta mode we use DeltaLNNP so labels are converted on-the-fly.
+    # In absolute mode we use vanilla LNNP.
     model = DeltaLNNP(model_args) if delta_learning else LNNP(model_args)
 
     checkpoint_callback = ModelCheckpoint(

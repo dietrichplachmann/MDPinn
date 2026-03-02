@@ -5,6 +5,13 @@ Main CLI entry point for training and comparison.
 This runner now treats delta-learning as the default advanced path:
 - `train_standard.py` handles supervised training with optional delta labels.
 - `train_physics.py` adds physics regularization on top of that.
+
+Physical interpretation:
+- Without `--delta-learning`, the neural network learns the FULL potential
+  surface directly from reference energies/forces.
+- With `--delta-learning`, the network learns only the correction
+  DeltaU(R) to an analytic baseline U_ref(R), so the deployed model is
+  U_hyb(R) = U_ref(R) + DeltaU(R).
 """
 
 import sys
@@ -184,6 +191,8 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=1e-4)
 
     # Delta-learning controls.
+    # Think of these as selecting the analytic "first guess" Hamiltonian:
+    # the NN then learns what that baseline misses.
     parser.add_argument("--delta-learning", action="store_true")
     parser.add_argument("--baseline-eps", type=float, default=0.01)
     parser.add_argument("--baseline-sigma", type=float, default=1.0)
