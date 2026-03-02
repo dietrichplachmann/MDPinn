@@ -21,8 +21,6 @@ from torch_geometric.loader import DataLoader as GeometricDataLoader
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
-from baseline_potential import lj_energy_forces_batched
-
 import time
 
 # Import physics losses
@@ -40,49 +38,9 @@ except ImportError:
     PHYSICS_LOSSES_AVAILABLE = False
 
 
-
-class DeltaLNNP(LNNP):
-    """LNNP wrapper that converts absolute labels to Δ-labels on the fly."""
-
-    def __init__(self, hparams, **kwargs):
-        super().__init__(hparams, **kwargs)
-        self.delta_learning = bool(hparams.get("delta_learning", False))
-        self.baseline_eps = float(hparams.get("baseline_epsilon_eV", 0.01))
-        self.baseline_sigma = float(hparams.get("baseline_sigma_A", 1.0))
-        self.baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))
-
-    def data_transform(self, batch):
-        batch = super().data_transform(batch)
-        if not self.delta_learning:
-            return batch
-
-        U_ref, F_ref = lj_energy_forces_batched(
-            z=batch.z,
-            pos=batch.pos,
-            batch=batch.batch,
-            epsilon_eV=self.baseline_eps,
-            sigma_A=self.baseline_sigma,
-            r_cut_A=self.baseline_cutoff,
-        )
-
-        if hasattr(batch, "y") and batch.y is not None:
-            y = batch.y
-            if y.ndim == 1:
-                y = y.unsqueeze(1)
-            batch.y = (y.squeeze(-1) - U_ref).unsqueeze(1)
-
-        if hasattr(batch, "neg_dy") and batch.neg_dy is not None:
-            batch.neg_dy = batch.neg_dy - F_ref
-
-        return batch
-
-
-class PhysicsInformedLNNP(DeltaLNNP):
+class PhysicsInformedLNNP(LNNP):
     """
     Extended LNNP with physics losses
-
-    Strategy: Override step() to intercept the forward pass results
-    and add physics losses to the total_loss before returning.
     """
 
     def __init__(self, hparams, **kwargs):
@@ -103,12 +61,22 @@ class PhysicsInformedLNNP(DeltaLNNP):
         # Track batches for NVE
         self.train_batch_counter = 0
 
+        self._cached_neg_dy = None
+
         print(f"Physics loss weights:")
         print(f"  Momentum: {self.momentum_weight}")
         print(f"  NVE:      {self.nve_weight} (every {self.nve_freq} batches)")
         print(f"  PBC:      {self.pbc_weight} (disabled)")
 
-    def step(self, batch, loss_fn_list, stage):
+    def forward(self, *args, **kwargs):
+        y, neg_dy = super().forward(*args, **kwargs)
+
+        # Cache forces for reuse inside step()
+        self._cached_neg_dy = neg_dy
+
+        return y, neg_dy
+
+    '''def step(self, batch, loss_fn_list, stage):
         """
         Override LNNP's step to add physics losses
 
@@ -182,6 +150,59 @@ class PhysicsInformedLNNP(DeltaLNNP):
         # Restore gradient state
         batch.pos.requires_grad_(requires_grad_state)
 
+        return total_loss'''
+
+    def step(self, batch, loss_fn_list, stage):
+        # Clear cache for this step
+        self._cached_neg_dy = None
+
+        # This will run forward internally (and now caches neg_dy via forward())
+        total_loss = super().step(batch, loss_fn_list, stage)
+
+        if stage == "train" and PHYSICS_LOSSES_AVAILABLE:
+            neg_dy = self._cached_neg_dy
+
+            # Safety fallback (should rarely happen). If it does, you can either:
+            # (a) skip physics this step, or (b) do the slow recompute.
+            if neg_dy is None:
+                # safest for speed: skip physics for this step
+                # return total_loss
+                #
+                # safest for identical behavior: recompute (old behavior)
+                '''with torch.enable_grad():
+                    _, neg_dy = self(
+                        batch.z,
+                        batch.pos,
+                        batch=batch.batch,
+                        box=batch.box if "box" in batch else None,
+                        q=batch.q if self.hparams.charge else None,
+                        s=batch.s if self.hparams.spin else None,
+                    )'''
+                neg_dy = self._cached_neg_dy
+                if neg_dy is None:
+                    raise RuntimeError("neg_dy was not cached — forward() did not run as expected.")
+
+            # --- your physics losses exactly as before, using neg_dy ---
+            loss_momentum = torch.tensor(0.0, device=self.device)
+            loss_nve = torch.tensor(0.0, device=self.device)
+
+            if self.momentum_weight > 0:
+                unique_batches = torch.unique(batch.batch)
+                for mol_idx in unique_batches:
+                    mask = batch.batch == mol_idx
+                    pos_mol = batch.pos[mask]
+                    forces_mol = neg_dy[mask]
+                    loss_momentum += momentum_symmetry_loss(pos_mol, forces_mol)
+                loss_momentum = loss_momentum / len(unique_batches)
+
+            if self.nve_weight > 0 and self.train_batch_counter % self.nve_freq == 0:
+                loss_nve = self._compute_nve_loss(self.train_batch_counter)
+
+            self.train_batch_counter += 1
+
+            physics_loss = self.momentum_weight * loss_momentum + self.nve_weight * loss_nve
+            total_loss = total_loss + physics_loss
+
         return total_loss
 
     def _compute_nve_loss(self, batch_idx):
@@ -206,9 +227,8 @@ class PhysicsInformedLNNP(DeltaLNNP):
                 self.device
             )
 
-            # Use self.model for NVE loss
             loss_nve = nve_loss_from_trajectory(
-                self.model,
+                self,
                 traj_batch,
                 self.device
             )
@@ -236,10 +256,6 @@ def train_physics_informed_model(
         pbc_weight=0.0,
         traj_length=100,
         nve_freq=10,
-        delta_learning: bool = False,
-        baseline_epsilon_eV: float = 0.01,
-        baseline_sigma_A: float = 1.0,
-        baseline_cutoff_A: float = 5.0,
 ):
     """Train physics-informed model"""
 
@@ -284,11 +300,6 @@ def train_physics_informed_model(
 
     # Model configuration
     model_args = {
-        # Δ-learning
-        'delta_learning': bool(delta_learning),
-        'baseline_epsilon_eV': float(baseline_epsilon_eV),
-        'baseline_sigma_A': float(baseline_sigma_A),
-        'baseline_cutoff_A': float(baseline_cutoff_A),
         'model': model_type,
         'prior_model': None,
         'output_model': 'Scalar',
@@ -432,8 +443,8 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.0001)
     parser.add_argument('--momentum-weight', type=float, default=0.01)
     parser.add_argument('--nve-weight', type=float, default=0.01)
-    parser.add_argument('--traj-length', type=int, default=100)
-    parser.add_argument('--nve-freq', type=int, default=10)
+    parser.add_argument('--traj-length', type=int, default=20)
+    parser.add_argument('--nve-freq', type=int, default=200)
 
     args = parser.parse_args()
 

@@ -24,8 +24,6 @@ from torch_geometric.loader import DataLoader as GeometricDataLoader
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
-from baseline_potential import lj_energy_forces_batched
-
 # Set plotting style
 sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (12, 8)
@@ -59,10 +57,6 @@ def load_checkpoint(checkpoint_path, device='cpu'):
 
         # Create model
         model = LNNP(hparams)
-        model._delta_learning = bool(hparams.get('delta_learning', False))
-        model._baseline_eps = float(hparams.get('baseline_epsilon_eV', 0.01))
-        model._baseline_sigma = float(hparams.get('baseline_sigma_A', 1.0))
-        model._baseline_cutoff = float(hparams.get('baseline_cutoff_A', 5.0))
 
         # Load state dict
         if 'state_dict' in checkpoint:
@@ -152,21 +146,6 @@ def evaluate_on_dataset(model, dataset, device='cuda', batch_size=32, max_sample
             # Forward pass (forces computed via autograd, not in no_grad context)
             with torch.enable_grad():
                 energy_pred, force_pred = model(batch.z, batch.pos, batch=batch.batch)
-
-            # If this is a Δ-learning checkpoint, add the analytic baseline back so we compare in absolute units.
-            if getattr(model, '_delta_learning', False):
-                U_ref, F_ref = lj_energy_forces_batched(
-                    z=batch.z,
-                    pos=batch.pos.detach(),
-                    batch=batch.batch,
-                    epsilon_eV=getattr(model, '_baseline_eps', 0.01),
-                    sigma_A=getattr(model, '_baseline_sigma', 1.0),
-                    r_cut_A=getattr(model, '_baseline_cutoff', 5.0),
-                )
-                # energy_pred is per-graph; U_ref is (B,)
-                energy_pred = energy_pred.squeeze(-1) + U_ref
-                energy_pred = energy_pred.unsqueeze(1)
-                force_pred = force_pred + F_ref
 
             # Collect predictions and targets
             energies_pred.append(energy_pred.detach().cpu())

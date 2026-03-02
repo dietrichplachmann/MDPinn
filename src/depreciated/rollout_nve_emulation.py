@@ -21,8 +21,6 @@ from torch.utils.data import random_split
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
-from baseline_potential import lj_energy_forces_batched
-
 # PyTorch 2.7 torch.load compatibility (your repo uses this pattern)
 _original_load = torch.load
 torch.load = lambda *args, **kwargs: _original_load(*args, **{**kwargs, "weights_only": False})
@@ -38,6 +36,9 @@ FORCE_TO_ACCEL = 0.009648533  # (eV/Å)/amu -> Å/fs^2
 # Kinetic energy conversion:
 #   1 amu * (Å/fs)^2 = 0.01036427 eV  (same constant used in your physics_losses.py)
 AMU_A2_FS2_TO_EV = 0.01036427
+
+# Boltzmann constant in eV/K
+K_BOLTZMANN_EV_PER_K = 8.617333262e-5
 
 
 ATOMIC_MASSES = {
@@ -73,10 +74,6 @@ def load_lnnp_from_ckpt(ckpt_path: str, device: str) -> LNNP:
         raise ValueError("Checkpoint has no hyper_parameters/hparams.")
 
     model = LNNP(hparams)
-    model._delta_learning = bool(hparams.get('delta_learning', False))
-    model._baseline_eps = float(hparams.get('baseline_epsilon_eV', 0.01))
-    model._baseline_sigma = float(hparams.get('baseline_sigma_A', 1.0))
-    model._baseline_cutoff = float(hparams.get('baseline_cutoff_A', 5.0))
 
     if "state_dict" not in ckpt:
         raise ValueError("Checkpoint has no state_dict.")
@@ -86,29 +83,31 @@ def load_lnnp_from_ckpt(ckpt_path: str, device: str) -> LNNP:
     return model
 
 
-@torch.no_grad()
 def model_energy_forces(model: LNNP, z: torch.Tensor, pos: torch.Tensor, device: str):
     """
     Returns:
-      U: scalar tensor (eV)
-      F: (N,3) tensor (eV/Å)
+      U: scalar tensor (eV) detached
+      F: (N,3) tensor (eV/Å) detached
     """
     n = z.shape[0]
     batch = torch.zeros(n, dtype=torch.long, device=device)
-    out = model(z, pos, batch=batch)
 
-    # TorchMD-Net returns (y, neg_dy) when derivative=True
-    if isinstance(out, tuple) and len(out) >= 2:
-        y, neg_dy = out[0], out[1]
-    else:
-        y, neg_dy = out, None
+    # Need grads ON for forces (dE/dx), but we detach outputs so we don't keep graphs.
+    with torch.enable_grad():
+        pos_req = pos.detach().clone().requires_grad_(True)
+        out = model(z, pos_req, batch=batch)
 
-    if neg_dy is None:
-        raise RuntimeError("Model did not return forces (neg_dy). Ensure derivative=True in the trained checkpoint.")
+        if isinstance(out, tuple) and len(out) >= 2:
+            y, neg_dy = out[0], out[1]
+        else:
+            y, neg_dy = out, None
 
-    # y can be shape (1,1) or (1,) depending on config
-    U = y.squeeze()
-    F = neg_dy
+        if neg_dy is None:
+            raise RuntimeError("Model did not return forces (neg_dy). Ensure derivative=True in the checkpoint.")
+
+        U = y.squeeze().detach()
+        F = neg_dy.detach()
+
     return U, F
 
 
@@ -120,6 +119,30 @@ def kinetic_energy(masses_amu: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """
     v2 = (v * v).sum(dim=-1)  # (N,)
     return 0.5 * AMU_A2_FS2_TO_EV * (masses_amu * v2).sum()
+
+
+
+def remove_com_velocity(v: torch.Tensor, masses_amu: torch.Tensor) -> torch.Tensor:
+    """Remove center-of-mass velocity so total linear momentum is ~0."""
+    m = masses_amu.view(-1, 1).to(v.device)
+    v_cm = (m * v).sum(dim=0, keepdim=True) / m.sum()
+    return v - v_cm
+
+
+def sample_maxwell_boltzmann_velocities(masses_amu: torch.Tensor, temperature_k: float, device: str) -> torch.Tensor:
+    """
+    Sample per-atom velocities from Maxwell–Boltzmann distribution.
+    Returns v in Å/fs.
+
+    For each Cartesian component:
+      0.5 * m * v^2 * (AMU_A2_FS2_TO_EV) = 0.5 * kB * T
+      => var(v) = kB*T / (m*AMU_A2_FS2_TO_EV)
+    """
+    m = masses_amu.to(device).float().view(-1, 1)  # (N,1)
+    var = (K_BOLTZMANN_EV_PER_K * float(temperature_k)) / (m * AMU_A2_FS2_TO_EV)  # (N,1) (Å/fs)^2
+    std = torch.sqrt(var).expand(-1, 3)  # (N,3)
+    v = torch.randn((m.shape[0], 3), device=device) * std
+    return remove_com_velocity(v, masses_amu.to(device))
 
 
 def velocity_verlet_rollout(
@@ -217,7 +240,12 @@ def main():
     ap.add_argument("--molecule", type=str, default="aspirin")
     ap.add_argument("--data-root", type=str, default="./data")
     ap.add_argument("--steps", type=int, default=20000)
-    ap.add_argument("--dt", type=float, default=0.5, help="fs")
+    ap.add_argument("--dt", type=float, default=0.5, help="fs (integrator timestep)")
+    ap.add_argument("--frame-dt", type=float, default=0.5, help="fs (dataset frame spacing for finite-diff velocities)")
+    ap.add_argument("--init-vel", type=str, default="mb", choices=["dataset", "zero", "mb"],
+                    help="Initial velocity mode: dataset (finite diff), zero, mb (Maxwell–Boltzmann)")
+    ap.add_argument("--temp", type=float, default=300.0, help="K (for --init-vel mb)")
+    ap.add_argument("--vel-scale", type=float, default=1.0, help="Scale applied to dataset finite-diff velocities")
     ap.add_argument("--n-rollouts", type=int, default=20)
     ap.add_argument("--energy-log-stride", type=int, default=10)
     ap.add_argument("--seed", type=int, default=42)
@@ -268,6 +296,10 @@ def main():
         "molecule": args.molecule,
         "steps": args.steps,
         "dt_fs": args.dt,
+        "frame_dt_fs": args.frame_dt,
+        "init_vel": args.init_vel,
+        "temp_K": args.temp,
+        "vel_scale": args.vel_scale,
         "n_rollouts": args.n_rollouts,
         "energy_log_stride": args.energy_log_stride,
         "seed": args.seed,
@@ -291,8 +323,14 @@ def main():
 
         masses = get_atomic_masses(z).to(device)
 
-        # initial velocity from finite diff
-        v0 = (x1 - x0) / args.dt  # Å/fs
+        # initial velocity
+        if args.init_vel == "dataset":
+            v0 = ((x1 - x0) / args.frame_dt) * float(args.vel_scale)  # Å/fs
+            v0 = remove_com_velocity(v0, masses)
+        elif args.init_vel == "zero":
+            v0 = torch.zeros_like(x0)
+        else:  # "mb"
+            v0 = sample_maxwell_boltzmann_velocities(masses, args.temp, device=device)
 
         out = velocity_verlet_rollout(
             model=model,

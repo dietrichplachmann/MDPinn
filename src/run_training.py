@@ -1,103 +1,94 @@
 #!/usr/bin/env python
 """
-Main Runner Script for TorchMD-NET Training
-Supports both standard and physics-informed training modes
+Main CLI entry point for training and comparison.
+
+This runner now treats delta-learning as the default advanced path:
+- `train_standard.py` handles supervised training with optional delta labels.
+- `train_physics.py` adds physics regularization on top of that.
 """
 
-import os
 import sys
 import argparse
 from pathlib import Path
 
 
 def print_banner():
-    """Print welcome banner"""
-    banner = """
-    ╔═══════════════════════════════════════════════════════════╗
-    ║                                                           ║
-    ║         TorchMD-NET Training System                       ║
-    ║         Physics-Informed Neural Network Potentials        ║
-    ║                                                           ║
-    ╚═══════════════════════════════════════════════════════════╝
-    """
-    print(banner)
+    """Print a simple startup banner."""
+    print("\n" + "=" * 70)
+    print("TorchMD-NET Training Runner (Delta-Learning Ready)")
+    print("=" * 70)
 
 
 def get_user_choice():
-    """Interactive menu for choosing training mode"""
+    """Interactive mode selector when --mode is not provided."""
     print("\nSelect training mode:")
-    print("  [1] Standard TorchMD-NET (baseline)")
-    print("  [2] Physics-Informed TorchMD-NET (with NVE, PBC, momentum losses)")
-    print("  [3] Compare both models (train both and generate comparison plots)")
+    print("  [1] Standard training")
+    print("  [2] Physics-informed training")
+    print("  [3] Train both + compare")
     print("  [4] Exit")
 
     while True:
         choice = input("\nEnter your choice (1-4): ").strip()
-        if choice in ['1', '2', '3', '4']:
+        if choice in ["1", "2", "3", "4"]:
             return choice
         print("Invalid choice. Please enter 1, 2, 3, or 4.")
 
 
 def setup_directories():
-    """Create necessary directories"""
-    dirs = [
-        'data',
-        'checkpoints',
-        'checkpoints/standard',
-        'checkpoints/physics_informed',
-        'logs',
-        'logs/standard',
-        'logs/physics_informed',
-        'results',
-        'results/plots',
-    ]
-
-    for d in dirs:
+    """Create output directories expected by the training scripts."""
+    for d in [
+        "data",
+        "checkpoints",
+        "checkpoints/standard",
+        "checkpoints/physics_informed",
+        "logs",
+        "logs/standard",
+        "logs/physics_informed",
+        "results",
+        "results/plots",
+    ]:
         Path(d).mkdir(parents=True, exist_ok=True)
 
-    print("✓ Directories created")
+    print("Directories ready.")
 
 
 def check_dependencies():
-    """Check if required packages are installed"""
+    """Check packages required by the current src entry points."""
     print("\nChecking dependencies...")
 
     required = {
-        'torch': 'PyTorch',
-        'torchmdnet': 'TorchMD-NET',
-        'pytorch_lightning': 'PyTorch Lightning',
-        'matplotlib': 'Matplotlib',
-        'numpy': 'NumPy',
+        "torch": "PyTorch",
+        "torchmdnet": "TorchMD-NET",
+        "lightning": "Lightning",
+        "numpy": "NumPy",
+        "matplotlib": "Matplotlib",
     }
 
     missing = []
     for package, name in required.items():
         try:
             __import__(package)
-            print(f"  ✓ {name}")
+            print(f"  OK {name}")
         except ImportError:
-            print(f"  ✗ {name} - MISSING")
+            print(f"  MISSING {name}")
             missing.append(package)
 
-    if missing:
-        print("\n⚠ Missing dependencies detected!")
-        print("Install with:")
-        if 'torchmdnet' in missing:
-            print("  pip install torchmd-net-cu11 --extra-index-url https://download.pytorch.org/whl/cu118")
-            missing.remove('torchmdnet')
-        if missing:
-            print(f"  pip install {' '.join(missing)}")
-        return False
+    if not missing:
+        print("All required dependencies are installed.")
+        return True
 
-    print("\n✓ All dependencies satisfied")
-    return True
+    print("\nInstall missing dependencies with pip, then rerun.")
+    if "torchmdnet" in missing:
+        print("  pip install torchmd-net-cu11 --extra-index-url https://download.pytorch.org/whl/cu118")
+    print(f"  pip install {' '.join([m for m in missing if m != 'torchmdnet'])}")
+    return False
 
 
 def run_standard_training(args):
-    """Run standard TorchMD-NET training"""
-    print("\n" + "=" * 60)
-    print("STANDARD TORCHMD-NET TRAINING")
-    print("=" * 60)
+    """Run standard trainer (can still be delta-learning when enabled)."""
+    print("\n" + "=" * 70)
+    print("STANDARD TRAINING")
+    print("=" * 70)
 
     from train_standard import train_standard_model
 
@@ -108,19 +99,20 @@ def run_standard_training(args):
         num_epochs=args.epochs,
         lr=args.lr,
         model_type=args.model,
-        save_dir='checkpoints/standard',
-        log_dir='logs/standard'
+        save_dir="checkpoints/standard",
+        log_dir="logs/standard",
+        delta_learning=args.delta_learning,
+        baseline_epsilon_eV=args.baseline_eps,
+        baseline_sigma_A=args.baseline_sigma,
+        baseline_cutoff_A=args.baseline_cutoff,
     )
-
-    print("\n✓ Standard training complete!")
-    print(f"  Model saved to: checkpoints/standard/")
 
 
 def run_physics_informed_training(args):
-    """Run physics-informed training"""
-    print("\n" + "=" * 60)
-    print("PHYSICS-INFORMED TORCHMD-NET TRAINING")
-    print("=" * 60)
+    """Run physics-informed trainer (also delta-capable)."""
+    print("\n" + "=" * 70)
+    print("PHYSICS-INFORMED TRAINING")
+    print("=" * 70)
 
     from train_physics import train_physics_informed_model
 
@@ -131,175 +123,134 @@ def run_physics_informed_training(args):
         num_epochs=args.epochs,
         lr=args.lr,
         model_type=args.model,
-        save_dir='checkpoints/physics_informed',
-        log_dir='logs/physics_informed',
-        # Physics loss weights
+        save_dir="checkpoints/physics_informed",
+        log_dir="logs/physics_informed",
         force_weight=args.force_weight,
         energy_weight=args.energy_weight,
         nve_weight=args.nve_weight,
         pbc_weight=args.pbc_weight,
         momentum_weight=args.momentum_weight,
         traj_length=args.traj_length,
+        delta_learning=args.delta_learning,
+        baseline_epsilon_eV=args.baseline_eps,
+        baseline_sigma_A=args.baseline_sigma,
+        baseline_cutoff_A=args.baseline_cutoff,
     )
-
-    print("\n✓ Physics-informed training complete!")
-    print(f"  Model saved to: checkpoints/physics_informed/")
 
 
 def run_comparison(args):
-    """Train both models and generate comparison plots"""
-    print("\n" + "=" * 60)
-    print("TRAINING BOTH MODELS FOR COMPARISON")
-    print("=" * 60)
+    """Train both models and then run metric/plot comparison."""
+    print("\n" + "=" * 70)
+    print("TRAIN + COMPARE")
+    print("=" * 70)
 
-    # Train standard model
     print("\n[1/3] Training standard model...")
     run_standard_training(args)
 
-    # Train physics-informed model
     print("\n[2/3] Training physics-informed model...")
     run_physics_informed_training(args)
 
-    # Generate comparison
-    print("\n[3/3] Generating comparison plots...")
+    print("\n[3/3] Comparing checkpoints...")
     from compare_models import compare_models
 
     compare_models(
-        standard_checkpoint='checkpoints/standard/best_model.ckpt',
-        physics_checkpoint='checkpoints/physics_informed/best_model.ckpt',
+        standard_checkpoint="checkpoints/standard/best_model.ckpt",
+        physics_checkpoint="checkpoints/physics_informed/best_model.ckpt",
         dataset=args.dataset,
         molecule=args.molecule,
-        output_dir='results/plots'
+        output_dir="results/plots",
     )
-
-    print("\n✓ Comparison complete!")
-    print(f"  Results saved to: results/plots/")
 
 
 def parse_args():
-    """Parse command line arguments"""
+    """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
-        description='TorchMD-NET Training Runner',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        description="TorchMD-NET training runner",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    # Dataset options
-    parser.add_argument('--dataset', type=str, default='MD17',
-                        choices=['MD17', 'rMD17', 'MD22', 'QM9'],
-                        help='Dataset to use')
-    parser.add_argument('--molecule', type=str, default='aspirin',
-                        help='Molecule name (for MD17/rMD17)')
+    parser.add_argument("--dataset", type=str, default="MD17", choices=["MD17", "rMD17", "MD22", "QM9"])
+    parser.add_argument("--molecule", type=str, default="aspirin")
 
-    # Model options
-    parser.add_argument('--model', type=str, default='tensornet',
-                        choices=['tensornet', 'equivariant-transformer', 'graph-network'],
-                        help='Model architecture')
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="tensornet",
+        choices=["tensornet", "equivariant-transformer", "graph-network"],
+    )
 
-    # Training hyperparameters
-    parser.add_argument('--batch-size', type=int, default=32,
-                        help='Batch size')
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='Number of epochs')
-    parser.add_argument('--lr', type=float, default=0.0001,
-                        help='Learning rate')
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--lr", type=float, default=1e-4)
 
-    # Standard loss weights
-    parser.add_argument('--force-weight', type=float, default=0.95,
-                        help='Weight for force loss')
-    parser.add_argument('--energy-weight', type=float, default=0.05,
-                        help='Weight for energy loss')
+    # Delta-learning controls.
+    parser.add_argument("--delta-learning", action="store_true")
+    parser.add_argument("--baseline-eps", type=float, default=0.01)
+    parser.add_argument("--baseline-sigma", type=float, default=1.0)
+    parser.add_argument("--baseline-cutoff", type=float, default=5.0)
 
-    # Physics-informed loss weights
-    parser.add_argument('--nve-weight', type=float, default=1.0,
-                        help='Weight for NVE conservation loss')
-    parser.add_argument('--pbc-weight', type=float, default=0.1,
-                        help='Weight for periodic boundary condition loss')
-    parser.add_argument('--momentum-weight', type=float, default=0.01,
-                        help='Weight for momentum conservation loss')
+    parser.add_argument("--force-weight", type=float, default=0.95)
+    parser.add_argument("--energy-weight", type=float, default=0.05)
 
-    # Trajectory options
-    parser.add_argument('--traj-length', type=int, default=100,
-                        help='Trajectory length for NVE loss')
+    parser.add_argument("--nve-weight", type=float, default=1.0)
+    parser.add_argument("--pbc-weight", type=float, default=0.1)
+    parser.add_argument("--momentum-weight", type=float, default=0.01)
+    parser.add_argument("--traj-length", type=int, default=100)
 
-    # Mode (can override interactive selection)
-    parser.add_argument('--mode', type=str, choices=['standard', 'physics', 'compare'],
-                        help='Training mode (skips interactive menu)')
+    parser.add_argument("--mode", type=str, choices=["standard", "physics", "compare"])
 
     return parser.parse_args()
 
 
 def main():
-    """Main entry point"""
+    """Program entry point."""
     print_banner()
-
-    # Parse arguments
     args = parse_args()
 
-    # Check dependencies
     if not check_dependencies():
-        print("\n⚠ Please install missing dependencies and try again.")
         sys.exit(1)
 
-    # Setup directories
     setup_directories()
 
-    # Get training mode
     if args.mode:
-        mode_map = {'standard': '1', 'physics': '2', 'compare': '3'}
-        choice = mode_map[args.mode]
+        choice = {"standard": "1", "physics": "2", "compare": "3"}[args.mode]
     else:
         choice = get_user_choice()
 
-    if choice == '4':
-        print("\nExiting...")
+    if choice == "4":
+        print("Exiting.")
         sys.exit(0)
 
-    # Display configuration
-    print("\n" + "=" * 60)
-    print("CONFIGURATION")
-    print("=" * 60)
-    print(f"  Dataset:      {args.dataset}")
-    if args.dataset in ['MD17', 'rMD17']:
-        print(f"  Molecule:     {args.molecule}")
-    print(f"  Model:        {args.model}")
-    print(f"  Batch size:   {args.batch_size}")
-    print(f"  Epochs:       {args.epochs}")
-    print(f"  Learning rate: {args.lr}")
-    if choice in ['2', '3']:
-        print(f"\n  Physics Loss Weights:")
-        print(f"    Force:      {args.force_weight}")
-        print(f"    Energy:     {args.energy_weight}")
-        print(f"    NVE:        {args.nve_weight}")
-        print(f"    PBC:        {args.pbc_weight}")
-        print(f"    Momentum:   {args.momentum_weight}")
-        print(f"  Traj Length:  {args.traj_length}")
-    print("=" * 60)
+    print("\nConfiguration summary")
+    print(f"  dataset={args.dataset}")
+    print(f"  molecule={args.molecule}")
+    print(f"  model={args.model}")
+    print(f"  batch_size={args.batch_size}")
+    print(f"  epochs={args.epochs}")
+    print(f"  lr={args.lr}")
+    print(f"  delta_learning={args.delta_learning}")
+    if args.delta_learning:
+        print(
+            f"  baseline=(eps={args.baseline_eps}, sigma={args.baseline_sigma}, cutoff={args.baseline_cutoff})"
+        )
 
-    # Confirm
     confirm = input("\nProceed with training? (y/n): ").strip().lower()
-    if confirm != 'y':
+    if confirm != "y":
         print("Training cancelled.")
         sys.exit(0)
 
-    # Run selected mode
     try:
-        if choice == '1':
+        if choice == "1":
             run_standard_training(args)
-        elif choice == '2':
+        elif choice == "2":
             run_physics_informed_training(args)
-        elif choice == '3':
+        elif choice == "3":
             run_comparison(args)
-
-        print("\n" + "=" * 60)
-        print("ALL TASKS COMPLETED SUCCESSFULLY!")
-        print("=" * 60)
-
-    except Exception as e:
-        print(f"\n✗ Error during training: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        print("\nDone.")
+    except Exception as exc:
+        print(f"\nTraining failed: {exc}")
+        raise
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

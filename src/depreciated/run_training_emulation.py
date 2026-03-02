@@ -99,7 +99,7 @@ def run_standard_training(args):
     print("STANDARD TORCHMD-NET TRAINING")
     print("=" * 60)
 
-    from train_standard_delta import train_standard_model
+    from train_standard import train_standard_model
 
     train_standard_model(
         dataset=args.dataset,
@@ -109,11 +109,7 @@ def run_standard_training(args):
         lr=args.lr,
         model_type=args.model,
         save_dir='checkpoints/standard',
-        log_dir='logs/standard',
-        delta_learning=args.delta_learning,
-        baseline_epsilon_eV=args.baseline_eps,
-        baseline_sigma_A=args.baseline_sigma,
-        baseline_cutoff_A=args.baseline_cutoff,
+        log_dir='logs/standard'
     )
 
     print("\n✓ Standard training complete!")
@@ -126,7 +122,7 @@ def run_physics_informed_training(args):
     print("PHYSICS-INFORMED TORCHMD-NET TRAINING")
     print("=" * 60)
 
-    from train_physics_delta import train_physics_informed_model
+    from train_physics import train_physics_informed_model
 
     train_physics_informed_model(
         dataset=args.dataset,
@@ -144,10 +140,6 @@ def run_physics_informed_training(args):
         pbc_weight=args.pbc_weight,
         momentum_weight=args.momentum_weight,
         traj_length=args.traj_length,
-        delta_learning=args.delta_learning,
-        baseline_epsilon_eV=args.baseline_eps,
-        baseline_sigma_A=args.baseline_sigma,
-        baseline_cutoff_A=args.baseline_cutoff,
     )
 
     print("\n✓ Physics-informed training complete!")
@@ -210,16 +202,6 @@ def parse_args():
                         help='Number of epochs')
     parser.add_argument('--lr', type=float, default=0.0001,
                         help='Learning rate')
-
-    # Δ-learning
-    parser.add_argument('--delta-learning', action='store_true',
-                        help='Train in Δ-learning mode: model learns residual to an analytic baseline')
-    parser.add_argument('--baseline-eps', type=float, default=0.01,
-                        help='Baseline LJ epsilon (eV) used for Δ-learning')
-    parser.add_argument('--baseline-sigma', type=float, default=1.0,
-                        help='Baseline LJ sigma (Å) used for Δ-learning')
-    parser.add_argument('--baseline-cutoff', type=float, default=5.0,
-                        help='Baseline LJ cutoff (Å) used for Δ-learning')
 
     # Standard loss weights
     parser.add_argument('--force-weight', type=float, default=0.95,

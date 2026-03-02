@@ -21,60 +21,6 @@ from torchmdnet.datasets import MD17
 from torchmdnet.models.model import create_model
 from torchmdnet.module import LNNP  # CORRECT LOCATION
 
-from baseline_potential import lj_energy_forces_batched
-
-
-
-class DeltaLNNP(LNNP):
-    """LNNP wrapper that converts absolute labels to Δ-labels on the fly.
-
-    When hparams['delta_learning'] is True:
-      y_target := y_true - U_ref
-      neg_dy_target := F_true - F_ref
-    and the network learns ΔU, ΔF. (Hybrid = ref + model at inference.)
-    """
-
-    def __init__(self, hparams, **kwargs):
-        super().__init__(hparams, **kwargs)
-        self.delta_learning = bool(getattr(self.hparams, "delta_learning", False)) if hasattr(self, "hparams") else bool(hparams.get("delta_learning", False))
-        self.baseline_eps = float(hparams.get("baseline_epsilon_eV", 0.01))
-        self.baseline_sigma = float(hparams.get("baseline_sigma_A", 1.0))
-        self.baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))
-
-    def data_transform(self, batch):
-        batch = super().data_transform(batch)
-
-        if not self.delta_learning:
-            return batch
-
-        # Compute analytic baseline on the *current* positions.
-        # Note: baseline ignores Z for now; that's OK for a first Δ-learning pivot.
-        U_ref, F_ref = lj_energy_forces_batched(
-            z=batch.z,
-            pos=batch.pos,
-            batch=batch.batch,
-            epsilon_eV=self.baseline_eps,
-            sigma_A=self.baseline_sigma,
-            r_cut_A=self.baseline_cutoff,
-        )
-
-        # Energy labels in MD17 are per-graph. Subtract per-graph baseline.
-        if hasattr(batch, "y") and batch.y is not None:
-            y = batch.y
-            if y.ndim == 1:
-                y = y.unsqueeze(1)
-            # Map per-atom batch indices -> per-graph baseline energy
-            # batch.y is per-graph (B,1), but random_split+GeometricDataLoader uses batch.batch to indicate graph.
-            # The order of graphs in the mini-batch is the sorted unique(batch.batch) used in lj_energy_forces_batched.
-            # That matches PyG's internal ordering for a standard collate.
-            batch.y = (y.squeeze(-1) - U_ref).unsqueeze(1)
-
-        # Force labels are per-atom (N,3)
-        if hasattr(batch, "neg_dy") and batch.neg_dy is not None:
-            batch.neg_dy = batch.neg_dy - F_ref
-
-        return batch
-
 
 def train_standard_model(
         dataset='MD17',
@@ -85,10 +31,6 @@ def train_standard_model(
         model_type='tensornet',
         save_dir='checkpoints/standard',
         log_dir='logs/standard',
-        delta_learning: bool = False,
-        baseline_epsilon_eV: float = 0.01,
-        baseline_sigma_A: float = 1.0,
-        baseline_cutoff_A: float = 5.0,
 ):
     """Train a standard TorchMD-NET model"""
 
@@ -197,7 +139,7 @@ def train_standard_model(
     print("Creating model...")
     try:
         # LNNP creates the model internally from hparams
-        model = DeltaLNNP(model_args) if delta_learning else LNNP(model_args)
+        model = LNNP(model_args)
         print("✓ Model created")
     except Exception as e:
         print(f"✗ Model creation failed: {e}")
