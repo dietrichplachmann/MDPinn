@@ -159,14 +159,14 @@ def compute_metrics(results):
     force_true = results["force_true"].flatten()
 
     return {
-        "energy_mae": np.mean(np.abs(energy_pred - energy_true)),
-        "energy_rmse": np.sqrt(np.mean((energy_pred - energy_true) ** 2)),
-        "energy_max_error": np.max(np.abs(energy_pred - energy_true)),
-        "force_mae": np.mean(np.abs(force_pred - force_true)),
-        "force_rmse": np.sqrt(np.mean((force_pred - force_true) ** 2)),
-        "force_max_error": np.max(np.abs(force_pred - force_true)),
-        "energy_r2": np.corrcoef(energy_pred, energy_true)[0, 1] ** 2,
-        "force_r2": np.corrcoef(force_pred, force_true)[0, 1] ** 2,
+        "energy_mae": float(np.mean(np.abs(energy_pred - energy_true))),
+        "energy_rmse": float(np.sqrt(np.mean((energy_pred - energy_true) ** 2))),
+        "energy_max_error": float(np.max(np.abs(energy_pred - energy_true))),
+        "force_mae": float(np.mean(np.abs(force_pred - force_true))),
+        "force_rmse": float(np.sqrt(np.mean((force_pred - force_true) ** 2))),
+        "force_max_error": float(np.max(np.abs(force_pred - force_true))),
+        "energy_r2": float(np.corrcoef(energy_pred, energy_true)[0, 1] ** 2),
+        "force_r2": float(np.corrcoef(force_pred, force_true)[0, 1] ** 2),
     }
 
 
