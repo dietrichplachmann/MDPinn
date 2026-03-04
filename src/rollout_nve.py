@@ -139,6 +139,8 @@ def velocity_verlet_rollout(
     dt_fs: float,
     device: str,
     energy_log_stride: int = 10,
+    progress_stride: int = 0,
+    rollout_id: int = None,
 ):
     """Run one NVE rollout and return logged energies/drift statistics.
 
@@ -206,6 +208,10 @@ def velocity_verlet_rollout(
                 fail_reason = "energy_numerical_blowup"
                 break
 
+        if progress_stride > 0 and (step % progress_stride == 0 or step == steps):
+            tag = f"[rollout {rollout_id}] " if rollout_id is not None else ""
+            print(f"{tag}step {step}/{steps}")
+
     return {
         "failed": failed,
         "fail_reason": fail_reason,
@@ -225,6 +231,7 @@ def main():
     parser.add_argument("--dt", type=float, default=0.5)
     parser.add_argument("--n-rollouts", type=int, default=20)
     parser.add_argument("--energy-log-stride", type=int, default=10)
+    parser.add_argument("--progress-stride", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--out", type=str, default=None)
@@ -274,6 +281,7 @@ def main():
     final_drifts = []
 
     for ridx, start_idx in enumerate(starts):
+        print(f"Starting rollout {ridx + 1}/{len(starts)} (start_idx={start_idx})")
         s0 = full[start_idx]
         s1 = full[start_idx + 1]
 
@@ -294,9 +302,16 @@ def main():
             dt_fs=args.dt,
             device=device,
             energy_log_stride=args.energy_log_stride,
+            progress_stride=args.progress_stride,
+            rollout_id=ridx + 1,
         )
 
         results["rollouts"].append({"rollout_id": ridx, "start_idx": int(start_idx), **out})
+        status = "FAILED" if out["failed"] else "OK"
+        print(
+            f"Finished rollout {ridx + 1}/{len(starts)}: {status}, "
+            f"final_step={out['final_step']}, max_abs_drift={out['max_abs_drift']}"
+        )
 
         if out["failed"]:
             n_failed += 1
