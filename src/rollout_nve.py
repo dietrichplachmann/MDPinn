@@ -81,7 +81,6 @@ def load_lnnp_from_ckpt(ckpt_path: str, device: str) -> LNNP:
     return model.eval().to(device)
 
 
-@torch.no_grad()
 def model_energy_forces(model: LNNP, z: torch.Tensor, pos: torch.Tensor, device: str):
     """Predict absolute potential energy and forces for current coordinates.
 
@@ -91,7 +90,12 @@ def model_energy_forces(model: LNNP, z: torch.Tensor, pos: torch.Tensor, device:
     """
     n = z.shape[0]
     batch = torch.zeros(n, dtype=torch.long, device=device)
-    out = model(z, pos, batch=batch)
+
+    # TorchMD-Net force prediction uses autograd internally, so positions must
+    # require grad even during rollout inference.
+    pos_req = pos.detach().requires_grad_(True)
+    with torch.enable_grad():
+        out = model(z, pos_req, batch=batch)
 
     if isinstance(out, tuple) and len(out) >= 2:
         y, neg_dy = out[0], out[1]
@@ -107,7 +111,7 @@ def model_energy_forces(model: LNNP, z: torch.Tensor, pos: torch.Tensor, device:
     if getattr(model, "_delta_learning", False):
         u_ref, f_ref = lj_energy_forces_batched(
             z=z,
-            pos=pos,
+            pos=pos_req,
             batch=batch,
             epsilon_eV=getattr(model, "_baseline_eps", 0.01),
             sigma_A=getattr(model, "_baseline_sigma", 1.0),
@@ -116,7 +120,7 @@ def model_energy_forces(model: LNNP, z: torch.Tensor, pos: torch.Tensor, device:
         y = y.squeeze(-1) + u_ref
         neg_dy = neg_dy + f_ref
 
-    return y.squeeze(), neg_dy
+    return y.squeeze().detach(), neg_dy.detach()
 
 
 def kinetic_energy(masses_amu: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
