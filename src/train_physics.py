@@ -5,6 +5,11 @@ Physics-informed training with optional delta-learning.
 This extends standard TorchMD-NET training by adding:
 - momentum conservation regularization,
 - optional NVE drift regularization on short trajectories.
+
+Chemist view:
+- Base supervised loss fits reference E and F (or residuals in delta mode).
+- Physics losses are soft constraints that bias training toward trajectories
+  with better dynamical behavior (less spurious drift / symmetry violation).
 """
 
 import json
@@ -30,7 +35,11 @@ torch.load = lambda *args, **kwargs: _original_load(*args, **{**kwargs, "weights
 
 
 class DeltaLNNP(LNNP):
-    """Convert absolute labels to residual labels when delta-learning is enabled."""
+    """Convert absolute labels to residual labels when delta-learning is enabled.
+
+    This mirrors `train_standard.py` so both training modes use the same
+    physical semantics for delta-learning.
+    """
 
     def __init__(self, hparams, **kwargs):
         super().__init__(hparams, **kwargs)
@@ -66,7 +75,12 @@ class DeltaLNNP(LNNP):
 
 
 class PhysicsInformedLNNP(DeltaLNNP):
-    """LNNP with extra physics losses added inside `step` during training."""
+    """LNNP with extra physics losses added inside `step` during training.
+
+    Interpretation of added terms:
+    - momentum loss: discourages net translational/rotational force imbalance.
+    - NVE loss: discourages potential-energy drift along short trajectory segments.
+    """
 
     def __init__(self, hparams, **kwargs):
         super().__init__(hparams, **kwargs)
@@ -87,13 +101,16 @@ class PhysicsInformedLNNP(DeltaLNNP):
         In absolute mode: U_abs = U_model
         In delta mode:    U_abs = U_ref + DeltaU_model
         """
+        # `self.model` is the underlying TorchMD-Net energy model.
         out = self.model(z, pos, batch=batch)
         if isinstance(out, tuple):
             out = out[0]
 
+        # Absolute-mode checkpoint already predicts total U(R).
         if not self.delta_learning:
             return out
 
+        # Delta-mode checkpoint predicts DeltaU(R); reconstruct total U_hyb(R).
         u_ref, _ = lj_energy_forces_batched(
             z=z,
             pos=pos,
@@ -113,6 +130,8 @@ class PhysicsInformedLNNP(DeltaLNNP):
 
         try:
             # Recompute model force prediction for physics penalties.
+            # We need force vectors explicitly because momentum symmetry is a
+            # force-level constraint.
             batch.pos = batch.pos.clone().detach().requires_grad_(True)
             _, neg_dy = self(
                 batch.z,
@@ -127,6 +146,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
             loss_nve = torch.tensor(0.0, device=self.device)
 
             if self.momentum_weight > 0:
+                # Apply momentum symmetry per molecule, then average.
                 unique_batches = torch.unique(batch.batch)
                 for mol_idx in unique_batches:
                     mask = batch.batch == mol_idx
@@ -134,6 +154,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
                 loss_momentum = loss_momentum / len(unique_batches)
 
             if self.nve_weight > 0 and self.train_batch_counter % self.nve_freq == 0:
+                # NVE is expensive, so it is sampled every nve_freq steps.
                 loss_nve = self._compute_nve_loss(self.train_batch_counter)
 
             self.train_batch_counter += 1
@@ -151,7 +172,12 @@ class PhysicsInformedLNNP(DeltaLNNP):
         return total_loss
 
     def _compute_nve_loss(self, batch_idx):
-        """Compute trajectory drift penalty on absolute energy."""
+        """Compute trajectory drift penalty on absolute energy.
+
+        Important: this always evaluates absolute energy drift.
+        In delta mode that means baseline + learned residual, matching the
+        deployed hybrid potential rather than just DeltaU alone.
+        """
         if self.full_dataset is None:
             return torch.tensor(0.0, device=self.device)
 
@@ -163,7 +189,8 @@ class PhysicsInformedLNNP(DeltaLNNP):
         start_idx = (batch_idx * 137) % max_start
         traj_batch = build_trajectory_batch(self.full_dataset, start_idx, self.traj_length, self.device)
 
-        # Wrap absolute-energy predictor to match expected callable signature.
+        # Wrap absolute-energy predictor to match expected callable signature
+        # expected by nve_loss_from_trajectory(...).
         def abs_energy_model(z, pos, batch):
             return self._predict_absolute_energy(z, pos, batch=batch)
 
@@ -195,7 +222,13 @@ def train_physics_informed_model(
     baseline_sigma_A=1.0,
     baseline_cutoff_A=5.0,
 ):
-    """Train physics-informed model with optional delta-learning targets."""
+    """Train physics-informed model with optional delta-learning targets.
+
+    Practical meaning:
+    - Standard terms fit reference data.
+    - Added physics terms reduce unphysical behavior between data points.
+    - Delta mode keeps the same constraints, but applied to the hybrid model.
+    """
 
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
@@ -277,6 +310,7 @@ def train_physics_informed_model(
         "distance_influence": "both",
     }
 
+    # PhysicsInformedLNNP includes both delta label handling and physics losses.
     model = PhysicsInformedLNNP(model_args)
     model.full_dataset = full_dataset
 

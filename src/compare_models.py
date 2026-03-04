@@ -5,6 +5,11 @@ Compare standard vs physics-informed checkpoints.
 Important delta-learning behavior:
 - If a checkpoint was trained in delta mode, this script reconstructs
   absolute energy/forces by adding analytic baseline terms back in.
+
+Chemist view:
+- We always compare on absolute observables (E and F), because those are what
+  matter for real MD behavior and what your advisor will care about.
+- Delta checkpoints are converted back to absolute predictions before metrics.
 """
 
 import json
@@ -34,7 +39,12 @@ plt.rcParams["font.size"] = 12
 
 
 def load_checkpoint(checkpoint_path, device="cpu"):
-    """Load checkpoint and attach delta metadata needed for absolute inference."""
+    """Load checkpoint and attach delta metadata needed for absolute inference.
+
+    The extra metadata flags tell downstream code whether this checkpoint emits:
+    - absolute quantities directly, or
+    - residual quantities that must be added to U_ref/F_ref.
+    """
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
     if "hyper_parameters" in checkpoint:
@@ -80,12 +90,15 @@ def predict_absolute_energy_forces(model, batch):
     - energy_abs: (B,1)
     - force_abs: (N,3)
     """
+    # Need grad-enabled forward because TorchMD-Net force prediction uses autograd.
     with torch.enable_grad():
         energy_pred, force_pred = model(batch.z, batch.pos, batch=batch.batch)
 
+    # Absolute checkpoint: already in physical units.
     if not getattr(model, "_delta_learning", False):
         return energy_pred, force_pred
 
+    # Delta checkpoint: convert (DeltaU, DeltaF) -> (U_hyb, F_hyb).
     u_ref, f_ref = lj_energy_forces_batched(
         z=batch.z,
         pos=batch.pos.detach(),
@@ -102,7 +115,11 @@ def predict_absolute_energy_forces(model, batch):
 
 
 def evaluate_on_dataset(model, dataset, device="cuda", batch_size=32, max_samples=None):
-    """Run absolute-energy/force evaluation on dataset subset."""
+    """Run absolute-energy/force evaluation on dataset subset.
+
+    We deliberately evaluate everything in absolute space so standard and delta
+    runs are directly comparable.
+    """
     model = model.to(device).eval()
     dataloader = GeometricDataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
@@ -154,7 +171,11 @@ def compute_metrics(results):
 
 
 def evaluate_energy_conservation(model, dataset, device="cuda", traj_length=100, num_trajs=10):
-    """Estimate mean/max drift of absolute predicted potential along dataset trajectories."""
+    """Estimate mean/max drift of absolute predicted potential along trajectories.
+
+    Note: this function checks potential drift only (not full kinetic+potential
+    Hamiltonian drift), so interpret it as a model smoothness/stability proxy.
+    """
     model = model.to(device).eval()
 
     max_start = len(dataset) - traj_length
@@ -279,7 +300,14 @@ def compare_models(
     output_dir="results/comparison",
     device="cuda" if torch.cuda.is_available() else "cpu",
 ):
-    """Run end-to-end comparison and write plots + JSON metrics."""
+    """Run end-to-end comparison and write plots + JSON metrics.
+
+    Workflow:
+    1) Load both checkpoints.
+    2) Reconstruct absolute predictions where needed.
+    3) Compute error metrics + drift proxies.
+    4) Save visual artifacts for advisor review.
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
