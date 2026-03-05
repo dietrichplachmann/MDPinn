@@ -138,6 +138,11 @@ def run_physics_informed_training(args):
         pbc_weight=args.pbc_weight,
         momentum_weight=args.momentum_weight,
         traj_length=args.traj_length,
+        nve_freq=args.nve_freq,
+        nve_warmup_epochs=args.nve_warmup_epochs,
+        nve_ramp_epochs=args.nve_ramp_epochs,
+        nve_relative=args.nve_relative,
+        nve_relative_eps=args.nve_relative_eps,
         delta_learning=args.delta_learning,
         baseline_epsilon_eV=args.baseline_eps,
         baseline_sigma_A=args.baseline_sigma,
@@ -201,10 +206,17 @@ def parse_args():
     parser.add_argument("--force-weight", type=float, default=0.95)
     parser.add_argument("--energy-weight", type=float, default=0.05)
 
-    parser.add_argument("--nve-weight", type=float, default=1.0)
-    parser.add_argument("--pbc-weight", type=float, default=0.1)
+    parser.add_argument("--nve-weight", type=float, default=0.01)
+    parser.add_argument("--pbc-weight", type=float, default=0.0)
     parser.add_argument("--momentum-weight", type=float, default=0.01)
     parser.add_argument("--traj-length", type=int, default=100)
+    parser.add_argument("--nve-freq", type=int, default=50)
+    parser.add_argument("--nve-warmup-epochs", type=int, default=5)
+    parser.add_argument("--nve-ramp-epochs", type=int, default=20)
+    parser.add_argument("--nve-relative", dest="nve_relative", action="store_true")
+    parser.add_argument("--nve-absolute", dest="nve_relative", action="store_false")
+    parser.set_defaults(nve_relative=True)
+    parser.add_argument("--nve-relative-eps", type=float, default=1e-6)
 
     parser.add_argument("--mode", type=str, choices=["standard", "physics", "compare"])
 
@@ -242,6 +254,13 @@ def main():
         print(
             f"  baseline=(eps={args.baseline_eps}, sigma={args.baseline_sigma}, cutoff={args.baseline_cutoff})"
         )
+    if choice in ["2", "3"]:
+        print(f"  momentum_weight={args.momentum_weight}")
+        print(f"  nve_weight={args.nve_weight}")
+        print(f"  nve_freq={args.nve_freq}")
+        print(f"  nve_warmup_epochs={args.nve_warmup_epochs}")
+        print(f"  nve_ramp_epochs={args.nve_ramp_epochs}")
+        print(f"  nve_relative={args.nve_relative}")
 
     confirm = input("\nProceed with training? (y/n): ").strip().lower()
     if confirm != "y":

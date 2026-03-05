@@ -100,7 +100,7 @@ def build_trajectory_batch(dataset, start_idx, traj_length, device):
     }
 
 
-def nve_loss_from_trajectory(model, traj_batch, device, dt=0.5):
+def nve_loss_from_trajectory(model, traj_batch, device, dt=0.5, relative=True, eps=1e-6):
     """
     NVE (energy conservation) loss for trajectory data
 
@@ -148,10 +148,14 @@ def nve_loss_from_trajectory(model, traj_batch, device, dt=0.5):
 
     E_pred_traj = torch.stack(E_pred_list)  # (T,)
 
-    # Penalize energy drift from initial value
-    # In NVE ensemble, E(t) should equal E(0) for all t
+    # Penalize energy drift from initial value.
+    # In NVE ensemble, E(t) should equal E(0) for all t.
+    # Relative mode makes the term scale-invariant across trajectories with
+    # different absolute energy offsets.
     E0 = E_pred_traj[0].detach()  # Detach to only penalize drift, not absolute value
     drift = E_pred_traj - E0
+    if relative:
+        drift = drift / (torch.abs(E0) + eps)
     L_drift = torch.mean(drift ** 2)
 
     # REMOVED: Reference energy term - it was too large and counterproductive

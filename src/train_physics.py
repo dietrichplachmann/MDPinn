@@ -90,10 +90,29 @@ class PhysicsInformedLNNP(DeltaLNNP):
         self.pbc_weight = float(hparams.get("pbc_weight", 0.0))
 
         self.traj_length = int(hparams.get("traj_length", 100))
-        self.nve_freq = int(hparams.get("nve_freq", 10))
+        self.nve_freq = int(hparams.get("nve_freq", 50))
+        self.nve_warmup_epochs = int(hparams.get("nve_warmup_epochs", 5))
+        self.nve_ramp_epochs = int(hparams.get("nve_ramp_epochs", 20))
+        self.nve_relative = bool(hparams.get("nve_relative", True))
+        self.nve_relative_eps = float(hparams.get("nve_relative_eps", 1e-6))
 
         self.full_dataset = None
         self.train_batch_counter = 0
+
+    def _effective_nve_weight(self):
+        """Return epoch-scheduled NVE weight (warmup + linear ramp)."""
+        base = self.nve_weight
+        epoch = int(getattr(self, "current_epoch", 0))
+
+        if epoch < self.nve_warmup_epochs:
+            return 0.0
+
+        if self.nve_ramp_epochs <= 0:
+            return base
+
+        ramp_pos = epoch - self.nve_warmup_epochs + 1
+        scale = min(1.0, max(0.0, ramp_pos / self.nve_ramp_epochs))
+        return base * scale
 
     def _predict_absolute_energy(self, z, pos, batch):
         """Return absolute potential energy for NVE loss.
@@ -153,7 +172,8 @@ class PhysicsInformedLNNP(DeltaLNNP):
                     loss_momentum += momentum_symmetry_loss(batch.pos[mask], neg_dy[mask])
                 loss_momentum = loss_momentum / len(unique_batches)
 
-            if self.nve_weight > 0 and self.train_batch_counter % self.nve_freq == 0:
+            effective_nve_weight = self._effective_nve_weight()
+            if effective_nve_weight > 0 and self.train_batch_counter % self.nve_freq == 0:
                 # NVE is expensive, so it is sampled every nve_freq steps.
                 loss_nve = self._compute_nve_loss(self.train_batch_counter)
 
@@ -161,8 +181,9 @@ class PhysicsInformedLNNP(DeltaLNNP):
 
             self.log("train_loss_momentum", loss_momentum, on_step=False, on_epoch=True)
             self.log("train_loss_nve", loss_nve, on_step=False, on_epoch=True)
+            self.log("train_nve_weight_effective", effective_nve_weight, on_step=False, on_epoch=True)
 
-            physics_loss = self.momentum_weight * loss_momentum + self.nve_weight * loss_nve
+            physics_loss = self.momentum_weight * loss_momentum + effective_nve_weight * loss_nve
             total_loss = total_loss + physics_loss
             self.log("train_total_with_physics", total_loss, on_step=False, on_epoch=True, prog_bar=True)
 
@@ -195,7 +216,13 @@ class PhysicsInformedLNNP(DeltaLNNP):
             return self._predict_absolute_energy(z, pos, batch=batch)
 
         try:
-            return nve_loss_from_trajectory(abs_energy_model, traj_batch, self.device)
+            return nve_loss_from_trajectory(
+                abs_energy_model,
+                traj_batch,
+                self.device,
+                relative=self.nve_relative,
+                eps=self.nve_relative_eps,
+            )
         except Exception as exc:
             print(f"Warning: NVE loss failed: {exc}")
             return torch.tensor(0.0, device=self.device)
@@ -216,7 +243,11 @@ def train_physics_informed_model(
     nve_weight=0.01,
     pbc_weight=0.0,
     traj_length=100,
-    nve_freq=10,
+    nve_freq=50,
+    nve_warmup_epochs=5,
+    nve_ramp_epochs=20,
+    nve_relative=True,
+    nve_relative_eps=1e-6,
     delta_learning=False,
     baseline_epsilon_eV=0.01,
     baseline_sigma_A=1.0,
@@ -296,6 +327,10 @@ def train_physics_informed_model(
         "pbc_weight": pbc_weight,
         "traj_length": traj_length,
         "nve_freq": nve_freq,
+        "nve_warmup_epochs": nve_warmup_epochs,
+        "nve_ramp_epochs": nve_ramp_epochs,
+        "nve_relative": bool(nve_relative),
+        "nve_relative_eps": float(nve_relative_eps),
         "atom_filter": -1,
         "reduce_op": "add",
         "equivariance_invariance_group": "O(3)",
@@ -357,6 +392,13 @@ def train_physics_informed_model(
             "nve": nve_weight,
             "pbc": pbc_weight,
         },
+        "physics_schedule": {
+            "nve_freq": nve_freq,
+            "nve_warmup_epochs": nve_warmup_epochs,
+            "nve_ramp_epochs": nve_ramp_epochs,
+            "nve_relative": bool(nve_relative),
+            "nve_relative_eps": float(nve_relative_eps),
+        },
     }
 
     with open(Path(save_dir) / "config.json", "w") as f:
@@ -377,7 +419,13 @@ if __name__ == "__main__":
     parser.add_argument("--momentum-weight", type=float, default=0.01)
     parser.add_argument("--nve-weight", type=float, default=0.01)
     parser.add_argument("--traj-length", type=int, default=100)
-    parser.add_argument("--nve-freq", type=int, default=10)
+    parser.add_argument("--nve-freq", type=int, default=50)
+    parser.add_argument("--nve-warmup-epochs", type=int, default=5)
+    parser.add_argument("--nve-ramp-epochs", type=int, default=20)
+    parser.add_argument("--nve-relative", dest="nve_relative", action="store_true")
+    parser.add_argument("--nve-absolute", dest="nve_relative", action="store_false")
+    parser.set_defaults(nve_relative=True)
+    parser.add_argument("--nve-relative-eps", type=float, default=1e-6)
     parser.add_argument("--delta-learning", action="store_true")
     parser.add_argument("--baseline-eps", type=float, default=0.01)
     parser.add_argument("--baseline-sigma", type=float, default=1.0)
@@ -393,6 +441,10 @@ if __name__ == "__main__":
         nve_weight=args.nve_weight,
         traj_length=args.traj_length,
         nve_freq=args.nve_freq,
+        nve_warmup_epochs=args.nve_warmup_epochs,
+        nve_ramp_epochs=args.nve_ramp_epochs,
+        nve_relative=args.nve_relative,
+        nve_relative_eps=args.nve_relative_eps,
         delta_learning=args.delta_learning,
         baseline_epsilon_eV=args.baseline_eps,
         baseline_sigma_A=args.baseline_sigma,
