@@ -60,6 +60,14 @@
     {
       "name": "ethanol_small_physics",
       "molecule": "ethanol"
+    },
+    {
+      "name": "benzene_small_physics",
+      "molecule": "benzene"
+    },
+    {
+      "name": "uracil_small_physics",
+      "molecule": "uracil"
     }
   ]
 }
