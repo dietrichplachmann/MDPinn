@@ -69,6 +69,10 @@ def load_checkpoint(checkpoint_path, device="cpu"):
 
 def create_dataset(dataset_name="MD17", molecule="aspirin", data_root="./data"):
     """Create MD17 dataset and fixed random split."""
+    if dataset_name != "MD17":
+        raise NotImplementedError(
+            f"Dataset '{dataset_name}' is not implemented in compare_models.py (supported: MD17)."
+        )
     full_dataset = MD17(root=data_root, molecules=molecule)
 
     train_size = int(0.8 * len(full_dataset))

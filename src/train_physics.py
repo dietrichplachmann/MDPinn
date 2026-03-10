@@ -26,7 +26,12 @@ from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
 from baseline_potential import lj_energy_forces_batched
-from physics_losses import momentum_symmetry_loss, nve_loss_from_trajectory, build_trajectory_batch
+from physics_losses import (
+    momentum_symmetry_loss,
+    nve_loss_from_trajectory,
+    build_trajectory_batch,
+    periodic_bc_loss_improved,
+)
 
 
 # PyTorch 2.7 checkpoint compatibility.
@@ -163,6 +168,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
 
             loss_momentum = torch.tensor(0.0, device=self.device)
             loss_nve = torch.tensor(0.0, device=self.device)
+            loss_pbc = torch.tensor(0.0, device=self.device)
 
             if self.momentum_weight > 0:
                 # Apply momentum symmetry per molecule, then average.
@@ -177,13 +183,38 @@ class PhysicsInformedLNNP(DeltaLNNP):
                 # NVE is expensive, so it is sampled every nve_freq steps.
                 loss_nve = self._compute_nve_loss(self.train_batch_counter)
 
+            if self.pbc_weight > 0 and hasattr(batch, "box") and batch.box is not None:
+                # Apply periodicity regularization per graph when box vectors are available.
+                unique_batches = torch.unique(batch.batch)
+                for mol_idx in unique_batches:
+                    mask = batch.batch == mol_idx
+                    box_l = self._extract_box_lengths(batch.box, int(mol_idx.item()))
+                    if box_l is None:
+                        continue
+
+                    local_batch = torch.zeros(int(mask.sum().item()), dtype=torch.long, device=self.device)
+                    loss_pbc += periodic_bc_loss_improved(
+                        self.model,
+                        batch.pos[mask],
+                        batch.z[mask],
+                        box_l,
+                        neg_dy[mask],
+                        local_batch,
+                    )
+                loss_pbc = loss_pbc / len(unique_batches)
+
             self.train_batch_counter += 1
 
             self.log("train_loss_momentum", loss_momentum, on_step=False, on_epoch=True)
             self.log("train_loss_nve", loss_nve, on_step=False, on_epoch=True)
+            self.log("train_loss_pbc", loss_pbc, on_step=False, on_epoch=True)
             self.log("train_nve_weight_effective", effective_nve_weight, on_step=False, on_epoch=True)
 
-            physics_loss = self.momentum_weight * loss_momentum + effective_nve_weight * loss_nve
+            physics_loss = (
+                self.momentum_weight * loss_momentum
+                + effective_nve_weight * loss_nve
+                + self.pbc_weight * loss_pbc
+            )
             total_loss = total_loss + physics_loss
             self.log("train_total_with_physics", total_loss, on_step=False, on_epoch=True, prog_bar=True)
 
@@ -227,6 +258,32 @@ class PhysicsInformedLNNP(DeltaLNNP):
             print(f"Warning: NVE loss failed: {exc}")
             return torch.tensor(0.0, device=self.device)
 
+    def _extract_box_lengths(self, box, graph_idx):
+        """Extract orthorhombic box lengths (Lx,Ly,Lz) for one graph if available."""
+        if box is None:
+            return None
+
+        try:
+            # Supported shapes commonly seen in batched data:
+            # - (B, 3, 3): full box vectors per graph
+            # - (3, 3): single box matrix
+            # - (B, 3): lengths per graph
+            # - (3,): single set of lengths
+            if box.dim() == 3:
+                box_g = box[graph_idx]
+                return torch.linalg.norm(box_g, dim=1)
+            if box.dim() == 2:
+                if box.shape[0] == 3 and box.shape[1] == 3:
+                    return torch.linalg.norm(box, dim=1)
+                if box.shape[1] == 3:
+                    return box[graph_idx]
+            if box.dim() == 1 and box.numel() == 3:
+                return box
+        except Exception:
+            return None
+
+        return None
+
 
 def train_physics_informed_model(
     dataset="MD17",
@@ -252,6 +309,10 @@ def train_physics_informed_model(
     baseline_epsilon_eV=0.01,
     baseline_sigma_A=1.0,
     baseline_cutoff_A=5.0,
+    embedding_dimension=256,
+    num_layers=6,
+    num_rbf=64,
+    checkpoint_name="best_model",
 ):
     """Train physics-informed model with optional delta-learning targets.
 
@@ -269,6 +330,9 @@ def train_physics_informed_model(
     print("=" * 70)
     print(f"dataset={dataset}, molecule={molecule}, model={model_type}")
     print(f"delta_learning={delta_learning}")
+
+    if dataset != "MD17":
+        raise NotImplementedError(f"Dataset '{dataset}' is not implemented in train_physics.py (supported: MD17).")
 
     full_dataset = MD17(root="./data", molecules=molecule)
 
@@ -303,9 +367,9 @@ def train_physics_informed_model(
         "precision": 32,
         "cutoff_lower": 0.0,
         "cutoff_upper": 5.0,
-        "embedding_dimension": 128,
-        "num_layers": 4,
-        "num_rbf": 64,
+        "embedding_dimension": int(embedding_dimension),
+        "num_layers": int(num_layers),
+        "num_rbf": int(num_rbf),
         "rbf_type": "expnorm",
         "trainable_rbf": False,
         "activation": "silu",
@@ -352,7 +416,7 @@ def train_physics_informed_model(
     checkpoint_callback = ModelCheckpoint(
         monitor="val_total_mse_loss",
         dirpath=save_dir,
-        filename="best_model",
+        filename=checkpoint_name,
         save_top_k=1,
         mode="min",
         save_last=True,
@@ -404,7 +468,7 @@ def train_physics_informed_model(
     with open(Path(save_dir) / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 
-    print(f"Training complete. Model: {save_dir}/best_model.ckpt")
+    print(f"Training complete. Model: {save_dir}/{checkpoint_name}.ckpt")
     return trainer, model, test_results
 
 
@@ -430,6 +494,10 @@ if __name__ == "__main__":
     parser.add_argument("--baseline-eps", type=float, default=0.01)
     parser.add_argument("--baseline-sigma", type=float, default=1.0)
     parser.add_argument("--baseline-cutoff", type=float, default=5.0)
+    parser.add_argument("--embedding-dimension", type=int, default=256)
+    parser.add_argument("--num-layers", type=int, default=6)
+    parser.add_argument("--num-rbf", type=int, default=64)
+    parser.add_argument("--checkpoint-name", type=str, default="best_model")
     args = parser.parse_args()
 
     train_physics_informed_model(
@@ -449,4 +517,8 @@ if __name__ == "__main__":
         baseline_epsilon_eV=args.baseline_eps,
         baseline_sigma_A=args.baseline_sigma,
         baseline_cutoff_A=args.baseline_cutoff,
+        embedding_dimension=args.embedding_dimension,
+        num_layers=args.num_layers,
+        num_rbf=args.num_rbf,
+        checkpoint_name=args.checkpoint_name,
     )

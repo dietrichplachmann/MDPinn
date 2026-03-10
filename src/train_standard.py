@@ -110,6 +110,10 @@ def train_standard_model(
     baseline_epsilon_eV=0.01,
     baseline_sigma_A=1.0,
     baseline_cutoff_A=5.0,
+    embedding_dimension=256,
+    num_layers=6,
+    num_rbf=64,
+    checkpoint_name="best_model",
 ):
     """Train standard model and optionally residualize targets for delta-learning.
 
@@ -130,6 +134,9 @@ def train_standard_model(
     print("=" * 70)
     print(f"dataset={dataset}, molecule={molecule}, model={model_type}")
     print(f"delta_learning={delta_learning}")
+
+    if dataset != "MD17":
+        raise NotImplementedError(f"Dataset '{dataset}' is not implemented in train_standard.py (supported: MD17).")
 
     print("Loading dataset...")
     full_dataset = MD17(root="./data", molecules=molecule)
@@ -170,9 +177,9 @@ def train_standard_model(
         "precision": 32,
         "cutoff_lower": 0.0,
         "cutoff_upper": 5.0,
-        "embedding_dimension": 256,
-        "num_layers": 6,
-        "num_rbf": 64,
+        "embedding_dimension": int(embedding_dimension),
+        "num_layers": int(num_layers),
+        "num_rbf": int(num_rbf),
         "rbf_type": "expnorm",
         "trainable_rbf": False,
         "activation": "silu",
@@ -211,7 +218,7 @@ def train_standard_model(
     checkpoint_callback = ModelCheckpoint(
         monitor="val_total_mse_loss",
         dirpath=save_dir,
-        filename="best_model",
+        filename=checkpoint_name,
         save_top_k=1,
         mode="min",
         save_last=True,
@@ -251,7 +258,7 @@ def train_standard_model(
     with open(Path(save_dir) / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 
-    print(f"Training complete. Model: {save_dir}/best_model.ckpt")
+    print(f"Training complete. Model: {save_dir}/{checkpoint_name}.ckpt")
     return trainer, model, test_results
 
 
@@ -268,6 +275,10 @@ if __name__ == "__main__":
     parser.add_argument("--baseline-eps", type=float, default=0.01)
     parser.add_argument("--baseline-sigma", type=float, default=1.0)
     parser.add_argument("--baseline-cutoff", type=float, default=5.0)
+    parser.add_argument("--embedding-dimension", type=int, default=256)
+    parser.add_argument("--num-layers", type=int, default=6)
+    parser.add_argument("--num-rbf", type=int, default=64)
+    parser.add_argument("--checkpoint-name", type=str, default="best_model")
     args = parser.parse_args()
 
     train_standard_model(
@@ -280,4 +291,8 @@ if __name__ == "__main__":
         baseline_epsilon_eV=args.baseline_eps,
         baseline_sigma_A=args.baseline_sigma,
         baseline_cutoff_A=args.baseline_cutoff,
+        embedding_dimension=args.embedding_dimension,
+        num_layers=args.num_layers,
+        num_rbf=args.num_rbf,
+        checkpoint_name=args.checkpoint_name,
     )

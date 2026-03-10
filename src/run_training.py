@@ -112,6 +112,10 @@ def run_standard_training(args):
         baseline_epsilon_eV=args.baseline_eps,
         baseline_sigma_A=args.baseline_sigma,
         baseline_cutoff_A=args.baseline_cutoff,
+        embedding_dimension=args.embedding_dimension,
+        num_layers=args.num_layers,
+        num_rbf=args.num_rbf,
+        checkpoint_name=args.checkpoint_name,
     )
 
 
@@ -147,6 +151,10 @@ def run_physics_informed_training(args):
         baseline_epsilon_eV=args.baseline_eps,
         baseline_sigma_A=args.baseline_sigma,
         baseline_cutoff_A=args.baseline_cutoff,
+        embedding_dimension=args.embedding_dimension,
+        num_layers=args.num_layers,
+        num_rbf=args.num_rbf,
+        checkpoint_name=args.checkpoint_name,
     )
 
 
@@ -217,6 +225,10 @@ def parse_args():
     parser.add_argument("--nve-absolute", dest="nve_relative", action="store_false")
     parser.set_defaults(nve_relative=True)
     parser.add_argument("--nve-relative-eps", type=float, default=1e-6)
+    parser.add_argument("--embedding-dimension", type=int, default=256)
+    parser.add_argument("--num-layers", type=int, default=6)
+    parser.add_argument("--num-rbf", type=int, default=64)
+    parser.add_argument("--checkpoint-name", type=str, default="best_model")
 
     parser.add_argument("--mode", type=str, choices=["standard", "physics", "compare"])
 
@@ -254,6 +266,11 @@ def main():
         print(
             f"  baseline=(eps={args.baseline_eps}, sigma={args.baseline_sigma}, cutoff={args.baseline_cutoff})"
         )
+    if choice in ["1", "2", "3"]:
+        print(f"  embedding_dimension={args.embedding_dimension}")
+        print(f"  num_layers={args.num_layers}")
+        print(f"  num_rbf={args.num_rbf}")
+        print(f"  checkpoint_name={args.checkpoint_name}")
     if choice in ["2", "3"]:
         print(f"  momentum_weight={args.momentum_weight}")
         print(f"  nve_weight={args.nve_weight}")

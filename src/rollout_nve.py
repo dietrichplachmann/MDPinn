@@ -225,6 +225,7 @@ def velocity_verlet_rollout(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", type=str, required=True)
+    parser.add_argument("--dataset", type=str, default="MD17")
     parser.add_argument("--molecule", type=str, default="aspirin")
     parser.add_argument("--data-root", type=str, default="./data")
     parser.add_argument("--steps", type=int, default=20000)
@@ -241,6 +242,9 @@ def main():
 
     device = args.device
     model = load_lnnp_from_ckpt(args.ckpt, device=device)
+
+    if args.dataset != "MD17":
+        raise NotImplementedError(f"Dataset '{args.dataset}' is not implemented in rollout_nve.py (supported: MD17).")
 
     full = MD17(root=args.data_root, molecules=args.molecule)
 
