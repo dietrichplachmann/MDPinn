@@ -432,6 +432,7 @@ def train_physics_informed_model(
         logger=logger,
         log_every_n_steps=10,
         gradient_clip_val=1000.0,
+        inference_mode=False,
     )
 
     print("Starting training...")

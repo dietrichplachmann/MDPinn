@@ -95,6 +95,8 @@ def predict_absolute_energy_forces(model, batch):
     - force_abs: (N,3)
     """
     # Need grad-enabled forward because TorchMD-Net force prediction uses autograd.
+    # Clone to avoid passing inference-mode tensors into backward-enabled ops.
+    batch.pos = batch.pos.detach().clone().requires_grad_(True)
     with torch.enable_grad():
         energy_pred, force_pred = model(batch.z, batch.pos, batch=batch.batch)
 
@@ -131,21 +133,20 @@ def evaluate_on_dataset(model, dataset, device="cuda", batch_size=32, max_sample
     forces_pred, forces_true = [], []
 
     samples_processed = 0
-    with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluating"):
-            batch = batch.to(device)
-            batch.pos.requires_grad_(True)
+    for batch in tqdm(dataloader, desc="Evaluating"):
+        batch = batch.to(device)
+        batch.pos = batch.pos.detach().clone().requires_grad_(True)
 
-            energy_abs, force_abs = predict_absolute_energy_forces(model, batch)
+        energy_abs, force_abs = predict_absolute_energy_forces(model, batch)
 
-            energies_pred.append(energy_abs.detach().cpu())
-            energies_true.append(batch.y.cpu())
-            forces_pred.append(force_abs.detach().cpu())
-            forces_true.append(batch.neg_dy.cpu())
+        energies_pred.append(energy_abs.detach().cpu())
+        energies_true.append(batch.y.detach().cpu())
+        forces_pred.append(force_abs.detach().cpu())
+        forces_true.append(batch.neg_dy.detach().cpu())
 
-            samples_processed += batch.num_graphs
-            if max_samples and samples_processed >= max_samples:
-                break
+        samples_processed += batch.num_graphs
+        if max_samples and samples_processed >= max_samples:
+            break
 
     return {
         "energy_pred": torch.cat(energies_pred).numpy(),
@@ -189,19 +190,18 @@ def evaluate_energy_conservation(model, dataset, device="cuda", traj_length=100,
     starts = np.random.choice(max_start, size=min(num_trajs, max_start), replace=False)
     energy_drifts = []
 
-    with torch.no_grad():
-        for start_idx in tqdm(starts, desc="Testing trajectories"):
-            energies = []
-            for t in range(traj_length):
-                sample = dataset[start_idx + t].to(device)
-                sample.pos.requires_grad_(True)
-                sample.batch = torch.zeros(sample.z.size(0), dtype=torch.long, device=device)
+    for start_idx in tqdm(starts, desc="Testing trajectories"):
+        energies = []
+        for t in range(traj_length):
+            sample = dataset[start_idx + t].to(device)
+            sample.pos = sample.pos.detach().clone().requires_grad_(True)
+            sample.batch = torch.zeros(sample.z.size(0), dtype=torch.long, device=device)
 
-                energy_abs, _ = predict_absolute_energy_forces(model, sample)
-                energies.append(energy_abs.detach().squeeze().item())
+            energy_abs, _ = predict_absolute_energy_forces(model, sample)
+            energies.append(energy_abs.detach().squeeze().item())
 
-            energies = np.asarray(energies)
-            energy_drifts.append(np.abs(energies - energies[0]).mean())
+        energies = np.asarray(energies)
+        energy_drifts.append(np.abs(energies - energies[0]).mean())
 
     return {
         "energy_drift_mean": float(np.mean(energy_drifts)),

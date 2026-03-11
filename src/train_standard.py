@@ -234,6 +234,7 @@ def train_standard_model(
         callbacks=[checkpoint_callback, early_stop],
         logger=logger,
         log_every_n_steps=10,
+        inference_mode=False,
     )
 
     print("Starting training...")
