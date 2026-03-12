@@ -1,0 +1,16 @@
+{
+  "standard": {
+    "failed": 0,
+    "success": 10,
+    "failure_rate": 0.0,
+    "mean_max_abs_drift_eV": 16.1625,
+    "mean_final_drift_eV": 1.453125
+  },
+  "physics": {
+    "failed": 0,
+    "success": 10,
+    "failure_rate": 0.0,
+    "mean_max_abs_drift_eV": 17.03125,
+    "mean_final_drift_eV": 1.64375
+  }
+}
