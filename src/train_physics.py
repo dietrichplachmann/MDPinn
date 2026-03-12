@@ -29,8 +29,10 @@ from baseline_potential import lj_energy_forces_batched
 from physics_losses import (
     momentum_symmetry_loss,
     nve_loss_from_trajectory,
+    nve_loss_with_kinetic_energy,
     build_trajectory_batch,
     periodic_bc_loss_improved,
+    get_atomic_masses,
 )
 
 
@@ -100,6 +102,11 @@ class PhysicsInformedLNNP(DeltaLNNP):
         self.nve_ramp_epochs = int(hparams.get("nve_ramp_epochs", 20))
         self.nve_relative = bool(hparams.get("nve_relative", True))
         self.nve_relative_eps = float(hparams.get("nve_relative_eps", 1e-6))
+        # `total_energy` is the recommended default for MD because it constrains
+        # the physically relevant Hamiltonian drift rather than potential-only drift.
+        self.nve_loss_mode = str(hparams.get("nve_loss_mode", "total_energy"))
+        # Keep the training-side trajectory timestep aligned with rollout/eval.
+        self.nve_dt_fs = float(hparams.get("nve_dt_fs", 0.5))
 
         self.full_dataset = None
         self.train_batch_counter = 0
@@ -181,6 +188,8 @@ class PhysicsInformedLNNP(DeltaLNNP):
             effective_nve_weight = self._effective_nve_weight()
             if effective_nve_weight > 0 and self.train_batch_counter % self.nve_freq == 0:
                 # NVE is expensive, so it is sampled every nve_freq steps.
+                # For short development sweeps, avoid setting this so high that
+                # the physics term almost never fires.
                 loss_nve = self._compute_nve_loss(self.train_batch_counter)
 
             if self.pbc_weight > 0 and hasattr(batch, "box") and batch.box is not None:
@@ -247,12 +256,29 @@ class PhysicsInformedLNNP(DeltaLNNP):
             return self._predict_absolute_energy(z, pos, batch=batch)
 
         try:
+            if self.nve_loss_mode == "total_energy":
+                masses = get_atomic_masses(traj_batch["Z"]).to(self.device)
+                return nve_loss_with_kinetic_energy(
+                    abs_energy_model,
+                    traj_batch,
+                    self.device,
+                    masses=masses,
+                    dt=self.nve_dt_fs,
+                )
+
+            if self.nve_loss_mode != "potential_only":
+                raise ValueError(
+                    f"Unsupported nve_loss_mode='{self.nve_loss_mode}'. "
+                    "Expected 'total_energy' or 'potential_only'."
+                )
+
             return nve_loss_from_trajectory(
                 abs_energy_model,
                 traj_batch,
                 self.device,
                 relative=self.nve_relative,
                 eps=self.nve_relative_eps,
+                dt=self.nve_dt_fs,
             )
         except Exception as exc:
             print(f"Warning: NVE loss failed: {exc}")
@@ -305,6 +331,8 @@ def train_physics_informed_model(
     nve_ramp_epochs=20,
     nve_relative=True,
     nve_relative_eps=1e-6,
+    nve_loss_mode="total_energy",
+    nve_dt_fs=0.5,
     delta_learning=False,
     baseline_epsilon_eV=0.01,
     baseline_sigma_A=1.0,
@@ -395,6 +423,8 @@ def train_physics_informed_model(
         "nve_ramp_epochs": nve_ramp_epochs,
         "nve_relative": bool(nve_relative),
         "nve_relative_eps": float(nve_relative_eps),
+        "nve_loss_mode": str(nve_loss_mode),
+        "nve_dt_fs": float(nve_dt_fs),
         "atom_filter": -1,
         "reduce_op": "add",
         "equivariance_invariance_group": "O(3)",
@@ -438,9 +468,8 @@ def train_physics_informed_model(
     print("Starting training...")
     trainer.fit(model, train_loader, val_loader)
 
-    # Kept for interface compatibility with standard trainer.
-    _ = test_loader
-    test_results = None
+    print("Testing best checkpoint...")
+    test_results = trainer.test(model, test_loader, ckpt_path="best")
 
     config = {
         "model_args": model_args,
@@ -452,6 +481,7 @@ def train_physics_informed_model(
             "lr": lr,
             "delta_learning": bool(delta_learning),
         },
+        "test_results": test_results[0] if test_results else None,
         "physics_weights": {
             "momentum": momentum_weight,
             "nve": nve_weight,
@@ -463,6 +493,8 @@ def train_physics_informed_model(
             "nve_ramp_epochs": nve_ramp_epochs,
             "nve_relative": bool(nve_relative),
             "nve_relative_eps": float(nve_relative_eps),
+            "nve_loss_mode": str(nve_loss_mode),
+            "nve_dt_fs": float(nve_dt_fs),
         },
     }
 
@@ -491,6 +523,8 @@ if __name__ == "__main__":
     parser.add_argument("--nve-absolute", dest="nve_relative", action="store_false")
     parser.set_defaults(nve_relative=True)
     parser.add_argument("--nve-relative-eps", type=float, default=1e-6)
+    parser.add_argument("--nve-loss-mode", type=str, default="total_energy")
+    parser.add_argument("--nve-dt-fs", type=float, default=0.5)
     parser.add_argument("--delta-learning", action="store_true")
     parser.add_argument("--baseline-eps", type=float, default=0.01)
     parser.add_argument("--baseline-sigma", type=float, default=1.0)
@@ -514,6 +548,8 @@ if __name__ == "__main__":
         nve_ramp_epochs=args.nve_ramp_epochs,
         nve_relative=args.nve_relative,
         nve_relative_eps=args.nve_relative_eps,
+        nve_loss_mode=args.nve_loss_mode,
+        nve_dt_fs=args.nve_dt_fs,
         delta_learning=args.delta_learning,
         baseline_epsilon_eV=args.baseline_eps,
         baseline_sigma_A=args.baseline_sigma,

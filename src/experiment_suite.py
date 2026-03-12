@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import re
+import shutil
 from pathlib import Path
 
 import torch
@@ -197,6 +198,10 @@ def main():
         e = _merge(defaults, exp)
 
         exp_dir = output_root / name
+        overwrite_existing = bool(e.get("overwrite_existing", False))
+        if overwrite_existing and exp_dir.exists():
+            print(f"Overwriting existing experiment directory: {exp_dir}")
+            shutil.rmtree(exp_dir)
         exp_dir.mkdir(parents=True, exist_ok=True)
         dataset = e.get("dataset", "MD17")
         molecule = e.get("molecule", "aspirin")

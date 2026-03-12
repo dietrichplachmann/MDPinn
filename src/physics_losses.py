@@ -164,7 +164,7 @@ def nve_loss_from_trajectory(model, traj_batch, device, dt=0.5, relative=True, e
     return L_drift
 
 
-def nve_loss_with_kinetic_energy(model, traj_batch, device, masses, dt=0.5):
+def nve_loss_with_kinetic_energy(model, traj_batch, device, masses, dt=0.5, relative=False, eps=1e-6):
     """
     Full NVE loss including kinetic energy:
         E_total = K + U_pred
@@ -222,6 +222,8 @@ def nve_loss_with_kinetic_energy(model, traj_batch, device, masses, dt=0.5):
     # Penalize drift from initial total energy
     E0 = E_total_traj[0].detach()
     drift = E_total_traj - E0
+    if relative:
+        drift = drift / (torch.abs(E0) + eps)
     L_NVE = torch.mean(drift ** 2)
 
     return L_NVE

@@ -1,5 +1,14 @@
 {
   "output_root": "results/experiments",
+  "_documentation": {
+    "overwrite_existing": "Set to true on an experiment to delete and recreate that experiment's output folder before running.",
+    "physics_defaults": [
+      "momentum regularization is disabled by default for MD17 single-molecule sweeps because the model already encodes most symmetry structure.",
+      "nve_loss_mode=total_energy regularizes K+U drift instead of potential-only drift.",
+      "nve_dt_fs is aligned to rollout dt so the training-side trajectory regularizer matches evaluation.",
+      "the NVE warmup/ramp/frequency defaults are tuned so the physics loss actually contributes during short 10-epoch development sweeps."
+    ]
+  },
   "defaults": {
     "dataset": "MD17",
     "model": "tensornet",
@@ -17,12 +26,14 @@
     "run_compare": true,
     "run_rollout": true,
     "physics_overrides": {
-      "momentum_weight": 0.005,
-      "nve_weight": 0.002,
-      "nve_freq": 200,
+      "momentum_weight": 0.0,
+      "nve_weight": 0.01,
+      "nve_freq": 50,
       "traj_length": 30,
-      "nve_warmup_epochs": 6,
-      "nve_ramp_epochs": 4,
+      "nve_warmup_epochs": 1,
+      "nve_ramp_epochs": 3,
+      "nve_loss_mode": "total_energy",
+      "nve_dt_fs": 0.1,
       "nve_relative": true,
       "pbc_weight": 0.0
     },
@@ -55,19 +66,23 @@
   "experiments": [
     {
       "name": "aspirin_small_physics",
-      "molecule": "aspirin"
+      "molecule": "aspirin",
+      "overwrite_existing": true
     },
     {
       "name": "ethanol_small_physics",
-      "molecule": "ethanol"
+      "molecule": "ethanol",
+      "overwrite_existing": true
     },
     {
       "name": "benzene_small_physics",
-      "molecule": "benzene"
+      "molecule": "benzene",
+      "overwrite_existing": true
     },
     {
       "name": "uracil_small_physics",
-      "molecule": "uracil"
+      "molecule": "uracil",
+      "overwrite_existing": true
     }
   ]
 }
