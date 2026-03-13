@@ -57,8 +57,8 @@
     "delta_learning": true
   },
   "test_results": {
-    "test_total_l1_loss": 1.3967186212539673,
-    "test_y_l1_loss": 2.9112722873687744,
-    "test_neg_dy_l1_loss": 1.3170052766799927
+    "test_total_l1_loss": 1.5747981071472168,
+    "test_y_l1_loss": 1.1825554370880127,
+    "test_neg_dy_l1_loss": 1.595442533493042
   }
 }

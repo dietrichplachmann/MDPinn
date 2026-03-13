@@ -14,14 +14,14 @@
   "num_rbf": 64,
   "standard_checkpoint": "results/experiments/aspirin_small_physics/checkpoints/standard/aspirin_single_256_6_standard/aspirin_single_256_6_standard.ckpt",
   "physics_checkpoint": "results/experiments/aspirin_small_physics/checkpoints/physics_informed/aspirin_single_256_6_physics/aspirin_single_256_6_physics.ckpt",
-  "energy_mae_std": 1.975932002067566,
-  "energy_mae_phys": 20.273910522460938,
-  "force_mae_std": 1.3904204368591309,
-  "force_mae_phys": 1.7384291887283325,
-  "drift_cmp_std": 5.581874999999999,
-  "drift_cmp_phys": 5.96371875,
+  "energy_mae_std": 1.2894797325134277,
+  "energy_mae_phys": 0.9895198941230774,
+  "force_mae_std": 1.6008418798446655,
+  "force_mae_phys": 1.621939778327942,
+  "drift_cmp_std": 6.136125,
+  "drift_cmp_phys": 7.5635,
   "rollout_fail_std": 0.0,
   "rollout_fail_phys": 0.0,
-  "rollout_drift_std": 16.65625,
-  "rollout_drift_phys": 16.159375
+  "rollout_drift_std": 16.425,
+  "rollout_drift_phys": 17.71875
 }

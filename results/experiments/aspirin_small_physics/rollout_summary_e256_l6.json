@@ -3,14 +3,14 @@
     "failed": 0,
     "success": 10,
     "failure_rate": 0.0,
-    "mean_max_abs_drift_eV": 16.65625,
-    "mean_final_drift_eV": 2.403125
+    "mean_max_abs_drift_eV": 16.425,
+    "mean_final_drift_eV": 5.465625
   },
   "physics": {
     "failed": 0,
     "success": 10,
     "failure_rate": 0.0,
-    "mean_max_abs_drift_eV": 16.159375,
-    "mean_final_drift_eV": 4.2125
+    "mean_max_abs_drift_eV": 17.71875,
+    "mean_final_drift_eV": 4.0625
   }
 }

@@ -1,33 +1,33 @@
 {
   "standard_metrics": {
-    "energy_mae": 1.975932002067566,
-    "energy_rmse": 2.1432268619537354,
-    "energy_max_error": 7.0,
-    "force_mae": 1.3904204368591309,
-    "force_rmse": 1.9213258028030396,
-    "force_max_error": 50.455162048339844,
-    "energy_r2": 0.9760853191518407,
-    "force_r2": 0.9952734507847356
+    "energy_mae": 1.2894797325134277,
+    "energy_rmse": 1.5170228481292725,
+    "energy_max_error": 6.03125,
+    "force_mae": 1.6008418798446655,
+    "force_rmse": 2.224674940109253,
+    "force_max_error": 36.264305114746094,
+    "energy_r2": 0.9732518005448526,
+    "force_r2": 0.9936704757074725
   },
   "physics_metrics": {
-    "energy_mae": 20.273910522460938,
-    "energy_rmse": 20.303064346313477,
-    "energy_max_error": 27.28125,
-    "force_mae": 1.7384291887283325,
-    "force_rmse": 2.484896183013916,
-    "force_max_error": 53.11292266845703,
-    "energy_r2": 0.9667381526451853,
-    "force_r2": 0.9921309898641731
+    "energy_mae": 0.9895198941230774,
+    "energy_rmse": 1.2107096910476685,
+    "energy_max_error": 5.875,
+    "force_mae": 1.621939778327942,
+    "force_rmse": 2.3506112098693848,
+    "force_max_error": 46.70233154296875,
+    "energy_r2": 0.9734470735445748,
+    "force_r2": 0.9929901706311602
   },
   "standard_drift": {
-    "energy_drift_mean": 5.581874999999999,
-    "energy_drift_std": 1.6981126816814898,
-    "energy_drift_max": 8.553125
+    "energy_drift_mean": 6.136125,
+    "energy_drift_std": 2.721155290898978,
+    "energy_drift_max": 12.7915625
   },
   "physics_drift": {
-    "energy_drift_mean": 5.96371875,
-    "energy_drift_std": 2.7218699642964324,
-    "energy_drift_max": 10.80375
+    "energy_drift_mean": 7.5635,
+    "energy_drift_std": 2.7634837961179093,
+    "energy_drift_max": 14.0103125
   },
   "dataset": "MD17",
   "molecule": "aspirin"
