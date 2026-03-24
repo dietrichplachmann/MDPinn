@@ -256,13 +256,20 @@ def train_standard_model(
 
     print("Starting training...")
     trainer.fit(model, train_loader, val_loader)
+    fit_metrics = {key: float(value.item()) for key, value in trainer.callback_metrics.items() if hasattr(value, "item")}
 
     print("Testing best checkpoint...")
     test_results = trainer.test(model, test_loader, ckpt_path="best")
-    val_metrics = {key: float(value) for key, value in trainer.callback_metrics.items() if hasattr(value, "item")}
+    test_callback_metrics = {
+        key: float(value.item()) for key, value in trainer.callback_metrics.items() if hasattr(value, "item")
+    }
     best_model_score = checkpoint_callback.best_model_score
     best_model_score = float(best_model_score.item()) if best_model_score is not None else None
     best_model_path = checkpoint_callback.best_model_path or str(Path(save_dir) / f"{checkpoint_name}.ckpt")
+    val_metrics = dict(fit_metrics)
+    val_metrics.update({f"post_test.{key}": value for key, value in test_callback_metrics.items()})
+    if best_model_score is not None:
+        val_metrics.setdefault("val_total_mse_loss", best_model_score)
 
     config = {
         "model_args": model_args,

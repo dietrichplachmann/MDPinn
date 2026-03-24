@@ -139,6 +139,8 @@ def _resolve_metric(metrics: dict, metric_name: str):
         return metrics[metric_name[11:]]
     if metric_name.startswith("test.") and metric_name in metrics:
         return metrics[metric_name]
+    if metric_name == DEFAULT_OBJECTIVE_NAME and "best_model_score" in metrics:
+        return metrics["best_model_score"]
     raise KeyError(f"Metric '{metric_name}' was not produced by this trial.")
 
 
