@@ -535,7 +535,7 @@ def run_study_config(config: dict):
         pruner=_create_pruner(config),
         load_if_exists=bool(config.get("resume", True)),
     )
-    study.set_user_attr("config_path", str(Path(config_path).resolve()))
+    study.set_user_attr("config_path", str(config.get("config_path", "<in-memory-config>")))
     study.set_user_attr("mode", config["mode"])
 
     study.optimize(
