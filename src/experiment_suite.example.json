@@ -88,7 +88,7 @@
         "trainer": {
           "max_epochs": 10,
           "num_workers": 0,
-          "enable_progress_bar": false
+          "enable_progress_bar": true
         },
         "sampler": {
           "name": "TPESampler",
