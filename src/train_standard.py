@@ -114,6 +114,18 @@ def train_standard_model(
     num_layers=6,
     num_rbf=64,
     checkpoint_name="best_model",
+    train_loss="mse_loss",
+    train_loss_arg=None,
+    energy_weight=0.05,
+    force_weight=0.95,
+    weight_decay=0.0,
+    lr_patience=15,
+    lr_min=1e-7,
+    lr_factor=0.8,
+    num_workers=4,
+    seed=42,
+    trainer_callbacks=None,
+    trainer_kwargs=None,
 ):
     """Train standard model and optionally residualize targets for delta-learning.
 
@@ -138,6 +150,8 @@ def train_standard_model(
     if dataset != "MD17":
         raise NotImplementedError(f"Dataset '{dataset}' is not implemented in train_standard.py (supported: MD17).")
 
+    pl.seed_everything(seed, workers=True)
+
     print("Loading dataset...")
     full_dataset = MD17(root="./data", molecules=molecule)
     print(f"Dataset loaded: {len(full_dataset)} samples")
@@ -149,12 +163,12 @@ def train_standard_model(
     train_data, val_data, test_data = random_split(
         full_dataset,
         [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(42),
+        generator=torch.Generator().manual_seed(seed),
     )
 
-    train_loader = GeometricDataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader = GeometricDataLoader(val_data, batch_size=batch_size, num_workers=4)
-    test_loader = GeometricDataLoader(test_data, batch_size=batch_size, num_workers=4)
+    train_loader = GeometricDataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    val_loader = GeometricDataLoader(val_data, batch_size=batch_size, num_workers=num_workers)
+    test_loader = GeometricDataLoader(test_data, batch_size=batch_size, num_workers=num_workers)
 
     # Include delta settings in checkpoint hyperparameters for reproducible inference.
     # This is essential because evaluation/rollout must know whether to do:
@@ -170,8 +184,8 @@ def train_standard_model(
         "output_model": "Scalar",
         "load_model": None,
         "remove_ref_energy": False,
-        "train_loss": "mse_loss",
-        "train_loss_arg": None,
+        "train_loss": train_loss,
+        "train_loss_arg": train_loss_arg,
         "charge": False,
         "spin": False,
         "precision": 32,
@@ -187,13 +201,13 @@ def train_standard_model(
         "max_num_neighbors": 128,
         "derivative": True,
         "lr": lr,
-        "lr_patience": 15,
-        "lr_min": 1e-7,
-        "lr_factor": 0.8,
+        "lr_patience": lr_patience,
+        "lr_min": lr_min,
+        "lr_factor": lr_factor,
         "lr_warmup_steps": 0,
-        "weight_decay": 0.0,
-        "y_weight": 0.05,
-        "neg_dy_weight": 0.95,
+        "weight_decay": weight_decay,
+        "y_weight": energy_weight,
+        "neg_dy_weight": force_weight,
         "ema_alpha_y": 1.0,
         "ema_alpha_neg_dy": 1.0,
         "atom_filter": -1,
@@ -226,15 +240,18 @@ def train_standard_model(
 
     early_stop = EarlyStopping(monitor="val_total_mse_loss", patience=30, mode="min")
     logger = TensorBoardLogger(save_dir=log_dir, name="standard")
+    trainer_callbacks = list(trainer_callbacks or [])
+    trainer_kwargs = dict(trainer_kwargs or {})
 
     trainer = pl.Trainer(
         max_epochs=num_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
-        callbacks=[checkpoint_callback, early_stop],
+        callbacks=[checkpoint_callback, early_stop, *trainer_callbacks],
         logger=logger,
         log_every_n_steps=10,
         inference_mode=False,
+        **trainer_kwargs,
     )
 
     print("Starting training...")
@@ -242,6 +259,10 @@ def train_standard_model(
 
     print("Testing best checkpoint...")
     test_results = trainer.test(model, test_loader, ckpt_path="best")
+    val_metrics = {key: float(value) for key, value in trainer.callback_metrics.items() if hasattr(value, "item")}
+    best_model_score = checkpoint_callback.best_model_score
+    best_model_score = float(best_model_score.item()) if best_model_score is not None else None
+    best_model_path = checkpoint_callback.best_model_path or str(Path(save_dir) / f"{checkpoint_name}.ckpt")
 
     config = {
         "model_args": model_args,
@@ -251,8 +272,17 @@ def train_standard_model(
             "batch_size": batch_size,
             "num_epochs": num_epochs,
             "lr": lr,
+            "seed": seed,
+            "weight_decay": weight_decay,
+            "train_loss": train_loss,
+            "train_loss_arg": train_loss_arg,
+            "energy_weight": energy_weight,
+            "force_weight": force_weight,
             "delta_learning": bool(delta_learning),
         },
+        "validation_metrics": val_metrics,
+        "best_model_path": best_model_path,
+        "best_model_score": best_model_score,
         "test_results": test_results[0] if test_results else None,
     }
 
@@ -260,7 +290,15 @@ def train_standard_model(
         json.dump(config, f, indent=2)
 
     print(f"Training complete. Model: {save_dir}/{checkpoint_name}.ckpt")
-    return trainer, model, test_results
+    return {
+        "trainer": trainer,
+        "model": model,
+        "test_results": test_results,
+        "best_model_path": best_model_path,
+        "best_model_score": best_model_score,
+        "validation_metrics": val_metrics,
+        "config": config,
+    }
 
 
 if __name__ == "__main__":

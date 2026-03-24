@@ -32,13 +32,14 @@ def get_user_choice():
     print("  [1] Standard training")
     print("  [2] Physics-informed training")
     print("  [3] Train both + compare")
-    print("  [4] Exit")
+    print("  [4] Optuna tuning")
+    print("  [5] Exit")
 
     while True:
-        choice = input("\nEnter your choice (1-4): ").strip()
-        if choice in ["1", "2", "3", "4"]:
+        choice = input("\nEnter your choice (1-5): ").strip()
+        if choice in ["1", "2", "3", "4", "5"]:
             return choice
-        print("Invalid choice. Please enter 1, 2, 3, or 4.")
+        print("Invalid choice. Please enter 1, 2, 3, 4, or 5.")
 
 
 def setup_directories():
@@ -53,6 +54,7 @@ def setup_directories():
         "logs/physics_informed",
         "results",
         "results/plots",
+        "results/optuna",
     ]:
         Path(d).mkdir(parents=True, exist_ok=True)
 
@@ -89,6 +91,22 @@ def check_dependencies():
         print("  pip install torchmd-net-cu11 --extra-index-url https://download.pytorch.org/whl/cu118")
     print(f"  pip install {' '.join([m for m in missing if m != 'torchmdnet'])}")
     return False
+
+
+def check_tuning_dependencies():
+    """Check packages required by the Optuna tuner."""
+    if not check_dependencies():
+        return False
+
+    try:
+        __import__("optuna")
+        print("  OK Optuna")
+        return True
+    except ImportError:
+        print("  MISSING Optuna")
+        print("\nInstall missing dependencies with pip, then rerun.")
+        print("  pip install optuna")
+        return False
 
 
 def run_standard_training(args):
@@ -182,6 +200,22 @@ def run_comparison(args):
     )
 
 
+def run_optuna_tuning(args):
+    """Run the Optuna tuner from a JSON config file."""
+    if not args.tuning_config:
+        raise ValueError("--tuning-config is required when mode=tune.")
+    if not check_tuning_dependencies():
+        raise RuntimeError("Required tuning dependencies are not installed.")
+
+    print("\n" + "=" * 70)
+    print("OPTUNA TUNING")
+    print("=" * 70)
+
+    from optuna_tuning import run_study
+
+    run_study(args.tuning_config)
+
+
 def parse_args():
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
@@ -230,7 +264,8 @@ def parse_args():
     parser.add_argument("--num-rbf", type=int, default=64)
     parser.add_argument("--checkpoint-name", type=str, default="best_model")
 
-    parser.add_argument("--mode", type=str, choices=["standard", "physics", "compare"])
+    parser.add_argument("--mode", type=str, choices=["standard", "physics", "compare", "tune"])
+    parser.add_argument("--tuning-config", type=str, default=None)
 
     return parser.parse_args()
 
@@ -240,17 +275,22 @@ def main():
     print_banner()
     args = parse_args()
 
-    if not check_dependencies():
+    if args.mode and not (check_tuning_dependencies() if args.mode == "tune" else check_dependencies()):
         sys.exit(1)
 
     setup_directories()
 
     if args.mode:
-        choice = {"standard": "1", "physics": "2", "compare": "3"}[args.mode]
+        choice = {"standard": "1", "physics": "2", "compare": "3", "tune": "4"}[args.mode]
     else:
         choice = get_user_choice()
 
-    if choice == "4":
+    if not args.mode:
+        dependency_ok = check_tuning_dependencies() if choice == "4" else check_dependencies()
+        if not dependency_ok:
+            sys.exit(1)
+
+    if choice == "5":
         print("Exiting.")
         sys.exit(0)
 
@@ -278,6 +318,8 @@ def main():
         print(f"  nve_warmup_epochs={args.nve_warmup_epochs}")
         print(f"  nve_ramp_epochs={args.nve_ramp_epochs}")
         print(f"  nve_relative={args.nve_relative}")
+    if choice == "4":
+        print(f"  tuning_config={args.tuning_config}")
 
     confirm = input("\nProceed with training? (y/n): ").strip().lower()
     if confirm != "y":
@@ -291,6 +333,8 @@ def main():
             run_physics_informed_training(args)
         elif choice == "3":
             run_comparison(args)
+        elif choice == "4":
+            run_optuna_tuning(args)
         print("\nDone.")
     except Exception as exc:
         print(f"\nTraining failed: {exc}")

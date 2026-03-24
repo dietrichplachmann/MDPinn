@@ -73,16 +73,6 @@
       "name": "ethanol_small_physics",
       "molecule": "ethanol",
       "overwrite_existing": true
-    },
-    {
-      "name": "benzene_small_physics",
-      "molecule": "benzene",
-      "overwrite_existing": true
-    },
-    {
-      "name": "uracil_small_physics",
-      "molecule": "uracil",
-      "overwrite_existing": true
     }
   ]
 }
