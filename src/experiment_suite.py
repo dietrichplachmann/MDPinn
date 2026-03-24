@@ -14,6 +14,7 @@ import csv
 import json
 import re
 import shutil
+from copy import deepcopy
 from pathlib import Path
 
 import torch
@@ -48,6 +49,226 @@ def _make_physics_grid(e):
             "num_rbf": int(e.get("num_rbf", 64)),
         }
     ]
+
+
+def _build_optuna_experiment_config(experiment_name, experiment_cfg, exp_dir):
+    tuning = deepcopy(experiment_cfg.get("optuna", {}))
+    if not tuning:
+        raise ValueError(f"Experiment '{experiment_name}' is marked for Optuna but has no 'optuna' config.")
+
+    fixed = deepcopy(tuning.get("fixed_params", {}))
+    fixed.setdefault("dataset", experiment_cfg.get("dataset", "MD17"))
+    fixed.setdefault("molecule", experiment_cfg.get("molecule", "aspirin"))
+    fixed.setdefault("model_type", experiment_cfg.get("model", "tensornet"))
+    fixed.setdefault("delta_learning", bool(experiment_cfg.get("delta_learning", False)))
+    fixed.setdefault("baseline_epsilon_eV", float(experiment_cfg.get("baseline_eps", 0.01)))
+    fixed.setdefault("baseline_sigma_A", float(experiment_cfg.get("baseline_sigma", 1.0)))
+    fixed.setdefault("baseline_cutoff_A", float(experiment_cfg.get("baseline_cutoff", 5.0)))
+
+    trainer_cfg = deepcopy(tuning.get("trainer", {}))
+    trainer_cfg.setdefault("max_epochs", int(experiment_cfg.get("epochs", 10)))
+    trainer_cfg.setdefault("num_workers", int(tuning.get("num_workers", 0)))
+
+    tuning["study_name"] = tuning.get("study_name", experiment_name)
+    tuning["results_root"] = str(exp_dir / "optuna")
+    tuning["fixed_params"] = fixed
+    tuning["trainer"] = trainer_cfg
+    return tuning
+
+
+def _summarize_optuna_experiment(experiment_name, experiment_cfg, exp_dir, study):
+    completed_trials = [trial for trial in study.trials if trial.state.name == "COMPLETE"]
+    best_trial = study.best_trial if completed_trials else None
+    summary = {
+        "experiment": experiment_name,
+        "variant": "optuna",
+        "runner": "optuna",
+        "dataset": experiment_cfg.get("dataset", "MD17"),
+        "molecule": experiment_cfg.get("molecule", "aspirin"),
+        "system_type": _sanitize_token(experiment_cfg.get("system_type", "single")),
+        "model": experiment_cfg.get("model", "tensornet"),
+        "epochs": experiment_cfg.get("epochs", experiment_cfg.get("optuna", {}).get("trainer", {}).get("max_epochs")),
+        "batch_size": None,
+        "lr": None,
+        "delta_learning": bool(experiment_cfg.get("delta_learning", False)),
+        "embedding_dimension": None,
+        "num_layers": None,
+        "num_rbf": None,
+        "standard_checkpoint": None,
+        "physics_checkpoint": None,
+        "optuna_study_dir": str(exp_dir / "optuna" / study.study_name),
+        "optuna_best_trial": best_trial.number if best_trial else None,
+        "optuna_best_value": best_trial.value if best_trial else None,
+    }
+
+    if best_trial:
+        summary["batch_size"] = best_trial.params.get("batch_size")
+        summary["lr"] = best_trial.params.get("lr")
+        summary["embedding_dimension"] = best_trial.params.get("embedding_dimension")
+        summary["num_layers"] = best_trial.params.get("num_layers")
+        summary["num_rbf"] = best_trial.params.get("num_rbf")
+
+        best_metrics_path = exp_dir / "optuna" / study.study_name / "best" / "best_metrics.json"
+        if best_metrics_path.exists():
+            with open(best_metrics_path, "r") as handle:
+                metrics = json.load(handle)
+            summary["best_model_path"] = metrics.get("best_model_path")
+            validation = metrics.get("validation_metrics", {})
+            test_results = (metrics.get("test_results") or [{}])[0]
+            summary["val_total_mse_loss"] = validation.get("val_total_mse_loss")
+            summary["test_total_mse_loss"] = test_results.get("test_total_mse_loss")
+
+    with open(exp_dir / "experiment_summary_optuna.json", "w") as handle:
+        json.dump(summary, handle, indent=2)
+
+    return summary
+
+
+def _load_best_optuna_metrics(exp_dir, study_name):
+    best_metrics_path = exp_dir / "optuna" / study_name / "best" / "best_metrics.json"
+    if not best_metrics_path.exists():
+        return None
+
+    with open(best_metrics_path, "r") as handle:
+        return json.load(handle)
+
+
+def _build_standard_reference_kwargs(experiment_cfg, best_metrics, exp_dir):
+    config = best_metrics.get("config", {})
+    training_cfg = config.get("training", {})
+    model_args = config.get("model_args", {})
+
+    checkpoint_name = "best_optuna_reference_standard"
+    return {
+        "dataset": training_cfg.get("dataset", experiment_cfg.get("dataset", "MD17")),
+        "molecule": training_cfg.get("molecule", experiment_cfg.get("molecule", "aspirin")),
+        "batch_size": int(training_cfg.get("batch_size", experiment_cfg.get("batch_size", 32))),
+        "num_epochs": int(experiment_cfg.get("optuna_post", {}).get("reference_epochs", training_cfg.get("num_epochs", experiment_cfg.get("epochs", 10)))),
+        "lr": float(training_cfg.get("lr", experiment_cfg.get("lr", 1e-4))),
+        "model_type": model_args.get("model", experiment_cfg.get("model", "tensornet")),
+        "save_dir": str(exp_dir / "optuna" / "reference_standard"),
+        "log_dir": str(exp_dir / "optuna" / "reference_standard_logs"),
+        "delta_learning": bool(training_cfg.get("delta_learning", experiment_cfg.get("delta_learning", False))),
+        "baseline_epsilon_eV": float(model_args.get("baseline_epsilon_eV", experiment_cfg.get("baseline_eps", 0.01))),
+        "baseline_sigma_A": float(model_args.get("baseline_sigma_A", experiment_cfg.get("baseline_sigma", 1.0))),
+        "baseline_cutoff_A": float(model_args.get("baseline_cutoff_A", experiment_cfg.get("baseline_cutoff", 5.0))),
+        "embedding_dimension": int(model_args.get("embedding_dimension", experiment_cfg.get("embedding_dimension", 256))),
+        "num_layers": int(model_args.get("num_layers", experiment_cfg.get("num_layers", 6))),
+        "num_rbf": int(model_args.get("num_rbf", experiment_cfg.get("num_rbf", 64))),
+        "checkpoint_name": checkpoint_name,
+        "train_loss": model_args.get("train_loss", "mse_loss"),
+        "train_loss_arg": model_args.get("train_loss_arg"),
+        "energy_weight": float(model_args.get("y_weight", 0.05)),
+        "force_weight": float(model_args.get("neg_dy_weight", 0.95)),
+        "weight_decay": float(model_args.get("weight_decay", 0.0)),
+        "lr_patience": int(model_args.get("lr_patience", 15)),
+        "lr_min": float(model_args.get("lr_min", 1e-7)),
+        "lr_factor": float(model_args.get("lr_factor", 0.8)),
+        "seed": int(training_cfg.get("seed", experiment_cfg.get("optuna", {}).get("seed", 42))),
+        "num_workers": int(experiment_cfg.get("optuna", {}).get("trainer", {}).get("num_workers", 0)),
+    }
+
+
+def _finalize_optuna_experiment(experiment_name, experiment_cfg, exp_dir, study):
+    completed_trials = [trial for trial in study.trials if trial.state.name == "COMPLETE"]
+    if not completed_trials:
+        return {}
+
+    best_trial = study.best_trial
+    best_metrics = _load_best_optuna_metrics(exp_dir, study.study_name)
+    if not best_metrics:
+        return {}
+
+    best_model_path = best_metrics.get("best_model_path")
+    if not best_model_path:
+        return {}
+
+    dataset = experiment_cfg.get("dataset", "MD17")
+    molecule = experiment_cfg.get("molecule", "aspirin")
+    device = experiment_cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+    post_cfg = experiment_cfg.get("optuna_post", {})
+    run_compare = bool(post_cfg.get("run_compare", experiment_cfg.get("run_compare", False)))
+    run_rollout = bool(post_cfg.get("run_rollout", experiment_cfg.get("run_rollout", False)))
+    rollout_cfg = experiment_cfg.get("rollout", {})
+    mode = experiment_cfg.get("optuna", {}).get("mode", "physics")
+
+    summary = {}
+
+    if run_compare and mode == "physics":
+        reference_kwargs = _build_standard_reference_kwargs(experiment_cfg, best_metrics, exp_dir)
+        reference_result = train_standard_model(**reference_kwargs)
+        reference_ckpt = reference_result["best_model_path"]
+        comparison_dir = exp_dir / "optuna" / study.study_name / "comparison_best"
+        cmp = compare_models(
+            standard_checkpoint=str(reference_ckpt),
+            physics_checkpoint=str(best_model_path),
+            dataset=dataset,
+            molecule=molecule,
+            output_dir=str(comparison_dir),
+            device=device,
+        )
+        summary.update(
+            {
+                "standard_checkpoint": str(reference_ckpt),
+                "physics_checkpoint": str(best_model_path),
+                "energy_mae_std": cmp["standard_metrics"]["energy_mae"],
+                "energy_mae_phys": cmp["physics_metrics"]["energy_mae"],
+                "force_mae_std": cmp["standard_metrics"]["force_mae"],
+                "force_mae_phys": cmp["physics_metrics"]["force_mae"],
+                "drift_cmp_std": cmp["standard_drift"]["energy_drift_mean"],
+                "drift_cmp_phys": cmp["physics_drift"]["energy_drift_mean"],
+            }
+        )
+
+    if run_rollout:
+        best_rollout = run_rollout_summary(
+            ckpt_path=best_model_path,
+            dataset=dataset,
+            molecule=molecule,
+            data_root=rollout_cfg.get("data_root", "./data"),
+            steps=int(rollout_cfg.get("steps", 5000)),
+            dt=float(rollout_cfg.get("dt", 0.1)),
+            n_rollouts=int(rollout_cfg.get("n_rollouts", 10)),
+            seed=int(rollout_cfg.get("seed", 42)),
+            device=device,
+            energy_log_stride=int(rollout_cfg.get("energy_log_stride", 20)),
+        )
+        summary.update(
+            {
+                "rollout_fail_phys": best_rollout["failure_rate"],
+                "rollout_drift_phys": best_rollout["mean_max_abs_drift_eV"],
+            }
+        )
+
+        if summary.get("standard_checkpoint"):
+            std_rollout = run_rollout_summary(
+                ckpt_path=summary["standard_checkpoint"],
+                dataset=dataset,
+                molecule=molecule,
+                data_root=rollout_cfg.get("data_root", "./data"),
+                steps=int(rollout_cfg.get("steps", 5000)),
+                dt=float(rollout_cfg.get("dt", 0.1)),
+                n_rollouts=int(rollout_cfg.get("n_rollouts", 10)),
+                seed=int(rollout_cfg.get("seed", 42)),
+                device=device,
+                energy_log_stride=int(rollout_cfg.get("energy_log_stride", 20)),
+            )
+            summary.update(
+                {
+                    "rollout_fail_std": std_rollout["failure_rate"],
+                    "rollout_drift_std": std_rollout["mean_max_abs_drift_eV"],
+                }
+            )
+            with open(exp_dir / "optuna" / study.study_name / "rollout_summary_best.json", "w") as handle:
+                json.dump({"standard": std_rollout, "physics": best_rollout}, handle, indent=2)
+        else:
+            with open(exp_dir / "optuna" / study.study_name / "rollout_summary_best.json", "w") as handle:
+                json.dump({"best_trial": best_rollout}, handle, indent=2)
+
+    summary["best_model_path"] = str(best_model_path)
+    summary["optuna_best_trial"] = best_trial.number
+    summary["optuna_best_value"] = best_trial.value
+    return summary
 
 
 def run_rollout_summary(
@@ -135,6 +356,7 @@ def write_tables(rows, out_dir):
     headers = [
         "experiment",
         "variant",
+        "runner",
         "dataset",
         "molecule",
         "system_type",
@@ -158,6 +380,12 @@ def write_tables(rows, out_dir):
         "rollout_fail_phys",
         "rollout_drift_std",
         "rollout_drift_phys",
+        "optuna_study_dir",
+        "optuna_best_trial",
+        "optuna_best_value",
+        "best_model_path",
+        "val_total_mse_loss",
+        "test_total_mse_loss",
     ]
 
     csv_path = out_dir / "summary_table.csv"
@@ -230,6 +458,18 @@ def main():
         print(f"Experiment: {name}")
         print("=" * 70)
 
+        if e.get("runner") == "optuna" or e.get("use_optuna", False):
+            from optuna_tuning import run_study_config
+
+            tuning_cfg = _build_optuna_experiment_config(name, e, exp_dir)
+            study = run_study_config(tuning_cfg)
+            summary = _summarize_optuna_experiment(name, e, exp_dir, study)
+            summary.update(_finalize_optuna_experiment(name, e, exp_dir, study))
+            with open(exp_dir / "experiment_summary_optuna.json", "w") as handle:
+                json.dump(summary, handle, indent=2)
+            rows.append(summary)
+            continue
+
         for variant in physics_grid:
             emb = int(variant.get("embedding_dimension", 256))
             layers = int(variant.get("num_layers", 6))
@@ -297,6 +537,7 @@ def main():
             summary = {
                 "experiment": name,
                 "variant": variant_tag,
+                "runner": "grid",
                 "dataset": dataset,
                 "molecule": molecule,
                 "system_type": system_type,

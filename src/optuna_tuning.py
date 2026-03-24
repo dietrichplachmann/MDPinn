@@ -494,10 +494,37 @@ def load_tuning_config(config_path: str):
     return cfg
 
 
-def run_study(config_path: str):
+def normalize_tuning_config(config: dict):
+    cfg = deepcopy(config)
+    study_name = cfg.get("study_name", "optuna_study")
+    results_root = Path(cfg.get("results_root", DEFAULT_RESULTS_ROOT))
+    storage = cfg.get("storage")
+    if not storage:
+        storage = f"sqlite:///{(results_root / study_name / 'optuna_study.db').as_posix()}"
+
+    objective = cfg.get("objective", {})
+    objective.setdefault("metric", DEFAULT_OBJECTIVE_NAME)
+    objective.setdefault("direction", "minimize")
+
+    cfg["study_name"] = study_name
+    cfg["results_root"] = str(results_root)
+    cfg["storage"] = storage
+    cfg["objective"] = objective
+    cfg.setdefault("mode", "physics")
+    cfg.setdefault("fixed_params", {})
+    cfg.setdefault("search_space", {})
+    cfg.setdefault("trainer", {})
+    cfg.setdefault("n_trials", 10)
+    cfg.setdefault("timeout", None)
+    cfg.setdefault("seed", 42)
+    cfg.setdefault("resume", True)
+    return cfg
+
+
+def run_study_config(config: dict):
     import optuna
 
-    config = load_tuning_config(config_path)
+    config = normalize_tuning_config(config)
     runner = StudyRunner(config)
 
     study = optuna.create_study(
@@ -521,6 +548,11 @@ def run_study(config_path: str):
 
     generate_study_summary(study, runner.study_dir, config)
     return study
+
+
+def run_study(config_path: str):
+    config = load_tuning_config(config_path)
+    return run_study_config(config)
 
 
 def parse_args():
