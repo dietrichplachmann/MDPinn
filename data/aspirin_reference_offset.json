@@ -1,0 +1,5 @@
+{
+  "molecule": "aspirin",
+  "energy_offset_eV": 406757.03125,
+  "source": "Estimated from baseline validation residual mean on the contiguous MD17 aspirin train split."
+}

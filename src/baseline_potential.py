@@ -27,6 +27,7 @@ FF_NONBONDED = CHARMM36_DIR / "ffnonbonded.itp"
 ASP_FF_BONDED = CHARMM36_DIR / "asp_ffbonded.itp"
 ASPIRIN_OFFSET = DATA_ROOT / "aspirin_reference_offset.json"
 KJMOL_TO_EV = 0.01036427230133138
+ASPIRIN_DEFAULT_ENERGY_OFFSET_EV = 406757.03125
 _ATOM_ORDER_CACHE: dict[tuple[int, ...], list[int]] = {}
 
 
@@ -140,10 +141,10 @@ def load_reference_energy_offset_eV(molecule: str | None = None) -> float:
     if (molecule or "").lower() != "aspirin":
         return 0.0
     if not ASPIRIN_OFFSET.exists():
-        return 0.0
+        return ASPIRIN_DEFAULT_ENERGY_OFFSET_EV
     with open(ASPIRIN_OFFSET, "r") as handle:
         payload = json.load(handle)
-    return float(payload.get("energy_offset_eV", 0.0))
+    return float(payload.get("energy_offset_eV", ASPIRIN_DEFAULT_ENERGY_OFFSET_EV))
 
 
 @lru_cache(maxsize=1)
