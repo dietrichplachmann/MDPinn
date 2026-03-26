@@ -1,0 +1,34 @@
+{
+  "standard_metrics": {
+    "energy_mae": 13.633161544799805,
+    "energy_rmse": 14.200966835021973,
+    "energy_max_error": 32.9375,
+    "force_mae": 12.044107437133789,
+    "force_rmse": 21.99959373474121,
+    "force_max_error": 285.0869140625,
+    "energy_r2": 0.6942820168364513,
+    "force_r2": 0.5563659422368906
+  },
+  "physics_metrics": {
+    "energy_mae": 29.255985260009766,
+    "energy_rmse": 29.550865173339844,
+    "energy_max_error": 52.28125,
+    "force_mae": 12.64903736114502,
+    "force_rmse": 22.18808937072754,
+    "force_max_error": 284.960693359375,
+    "energy_r2": 0.6715922509398443,
+    "force_r2": 0.542315758101077
+  },
+  "standard_drift": {
+    "energy_drift_mean": 7.055249999999999,
+    "energy_drift_std": 2.3045700046321005,
+    "energy_drift_max": 11.5525
+  },
+  "physics_drift": {
+    "energy_drift_mean": 9.328375,
+    "energy_drift_std": 2.430722258757415,
+    "energy_drift_max": 12.8446875
+  },
+  "dataset": "MD17",
+  "molecule": "aspirin"
+}

@@ -1,0 +1,43 @@
+{
+  "train_loss": "mse_loss",
+  "train_loss_arg": null,
+  "pbc_weight": 0.0,
+  "dataset": "MD17",
+  "molecule": "aspirin",
+  "model_type": "tensornet",
+  "delta_learning": true,
+  "baseline_epsilon_eV": 0.005118807219845014,
+  "baseline_sigma_A": 0.8331617157060953,
+  "baseline_cutoff_A": 3.599326836668414,
+  "batch_size": 32,
+  "lr": 0.00040489662225846743,
+  "weight_decay": 5.575453980775358e-08,
+  "embedding_dimension": 64,
+  "num_layers": 2,
+  "num_rbf": 64,
+  "energy_weight": 0.20632354382139834,
+  "force_weight": 0.9565753399815224,
+  "momentum_weight": 0.0003476065265595352,
+  "nve_weight": 0.02553736512887829,
+  "traj_length": 30,
+  "nve_freq": 25,
+  "nve_warmup_epochs": 0,
+  "nve_ramp_epochs": 1,
+  "nve_relative": true,
+  "nve_relative_eps": 1.0249816559563211e-06,
+  "nve_loss_mode": "potential_only",
+  "nve_dt_fs": 0.1,
+  "num_epochs": 10,
+  "checkpoint_name": "trial_0003",
+  "seed": 45,
+  "num_workers": 0,
+  "save_dir": "results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics/trial_0003/checkpoints",
+  "log_dir": "results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics/trial_0003/logs",
+  "trainer_callbacks": [
+    "OptunaPruningCallback"
+  ],
+  "trainer_kwargs": {
+    "enable_progress_bar": true,
+    "deterministic": false
+  }
+}
