@@ -26,7 +26,7 @@ from torch_geometric.loader import DataLoader as GeometricDataLoader
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
-from baseline_potential import lj_energy_forces_batched
+from baseline_potential import reference_energy_forces_batched
 from data_splits import contiguous_split
 
 
@@ -48,6 +48,7 @@ class DeltaLNNP(LNNP):
     def __init__(self, hparams, **kwargs):
         super().__init__(hparams, **kwargs)
         self.delta_learning = bool(hparams.get("delta_learning", False))
+        self.baseline_molecule = str(hparams.get("baseline_molecule", hparams.get("molecule", "aspirin")))
         self.baseline_eps = float(hparams.get("baseline_epsilon_eV", 0.01))
         self.baseline_sigma = float(hparams.get("baseline_sigma_A", 1.0))
         self.baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))
@@ -69,10 +70,12 @@ class DeltaLNNP(LNNP):
         # Compute baseline on current coordinates.
         # Physically: this is the part of the force field we choose to keep
         # analytic and interpretable.
-        U_ref, F_ref = lj_energy_forces_batched(
+        U_ref, F_ref = reference_energy_forces_batched(
             z=batch.z,
             pos=batch.pos,
             batch=batch.batch,
+            molecule=self.baseline_molecule,
+            box_l=batch.box if "box" in batch else None,
             epsilon_eV=self.baseline_eps,
             sigma_A=self.baseline_sigma,
             r_cut_A=self.baseline_cutoff,
@@ -168,6 +171,7 @@ def train_standard_model(
     #   U_abs = U_ref + U_model (DeltaU)     (delta mode)
     model_args = {
         "delta_learning": bool(delta_learning),
+        "baseline_molecule": molecule,
         "baseline_epsilon_eV": float(baseline_epsilon_eV),
         "baseline_sigma_A": float(baseline_sigma_A),
         "baseline_cutoff_A": float(baseline_cutoff_A),

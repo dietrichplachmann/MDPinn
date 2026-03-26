@@ -20,7 +20,7 @@ import torch
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
-from baseline_potential import lj_energy_forces_batched
+from baseline_potential import reference_energy_forces_batched
 from data_splits import contiguous_split
 
 
@@ -73,6 +73,7 @@ def load_lnnp_from_ckpt(ckpt_path: str, device: str) -> LNNP:
     model.load_state_dict(ckpt["state_dict"], strict=True)
 
     model._delta_learning = bool(hparams.get("delta_learning", False))
+    model._baseline_molecule = str(hparams.get("baseline_molecule", hparams.get("molecule", "aspirin")))
     model._baseline_eps = float(hparams.get("baseline_epsilon_eV", 0.01))
     model._baseline_sigma = float(hparams.get("baseline_sigma_A", 1.0))
     model._baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))
@@ -108,10 +109,11 @@ def model_energy_forces(model: LNNP, z: torch.Tensor, pos: torch.Tensor, device:
     # This enforces physically consistent hybrid dynamics in rollout:
     #   F_hyb = F_ref + DeltaF_NN
     if getattr(model, "_delta_learning", False):
-        u_ref, f_ref = lj_energy_forces_batched(
+        u_ref, f_ref = reference_energy_forces_batched(
             z=z,
             pos=pos_req,
             batch=batch,
+            molecule=getattr(model, "_baseline_molecule", "aspirin"),
             epsilon_eV=getattr(model, "_baseline_eps", 0.01),
             sigma_A=getattr(model, "_baseline_sigma", 1.0),
             r_cut_A=getattr(model, "_baseline_cutoff", 5.0),

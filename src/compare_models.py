@@ -25,7 +25,7 @@ from tqdm import tqdm
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
-from baseline_potential import lj_energy_forces_batched
+from baseline_potential import reference_energy_forces_batched
 from data_splits import contiguous_split
 
 
@@ -60,6 +60,7 @@ def load_checkpoint(checkpoint_path, device="cpu"):
     model.load_state_dict(checkpoint["state_dict"])
 
     model._delta_learning = bool(hparams.get("delta_learning", False))
+    model._baseline_molecule = str(hparams.get("baseline_molecule", hparams.get("molecule", "aspirin")))
     model._baseline_eps = float(hparams.get("baseline_epsilon_eV", 0.01))
     model._baseline_sigma = float(hparams.get("baseline_sigma_A", 1.0))
     model._baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))
@@ -97,10 +98,12 @@ def predict_absolute_energy_forces(model, batch):
         return energy_pred, force_pred
 
     # Delta checkpoint: convert (DeltaU, DeltaF) -> (U_hyb, F_hyb).
-    u_ref, f_ref = lj_energy_forces_batched(
+    u_ref, f_ref = reference_energy_forces_batched(
         z=batch.z,
         pos=batch.pos.detach(),
         batch=batch.batch,
+        molecule=getattr(model, "_baseline_molecule", "aspirin"),
+        box_l=batch.box if "box" in batch else None,
         epsilon_eV=getattr(model, "_baseline_eps", 0.01),
         sigma_A=getattr(model, "_baseline_sigma", 1.0),
         r_cut_A=getattr(model, "_baseline_cutoff", 5.0),

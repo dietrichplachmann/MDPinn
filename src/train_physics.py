@@ -24,7 +24,7 @@ from torch_geometric.loader import DataLoader as GeometricDataLoader
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
-from baseline_potential import lj_energy_forces_batched
+from baseline_potential import reference_energy_forces_batched
 from data_splits import contiguous_split
 from physics_losses import (
     momentum_symmetry_loss,
@@ -51,6 +51,7 @@ class DeltaLNNP(LNNP):
     def __init__(self, hparams, **kwargs):
         super().__init__(hparams, **kwargs)
         self.delta_learning = bool(hparams.get("delta_learning", False))
+        self.baseline_molecule = str(hparams.get("baseline_molecule", hparams.get("molecule", "aspirin")))
         self.baseline_eps = float(hparams.get("baseline_epsilon_eV", 0.01))
         self.baseline_sigma = float(hparams.get("baseline_sigma_A", 1.0))
         self.baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))
@@ -60,10 +61,12 @@ class DeltaLNNP(LNNP):
         if not self.delta_learning:
             return batch
 
-        U_ref, F_ref = lj_energy_forces_batched(
+        U_ref, F_ref = reference_energy_forces_batched(
             z=batch.z,
             pos=batch.pos,
             batch=batch.batch,
+            molecule=self.baseline_molecule,
+            box_l=batch.box if "box" in batch else None,
             epsilon_eV=self.baseline_eps,
             sigma_A=self.baseline_sigma,
             r_cut_A=self.baseline_cutoff,
@@ -143,10 +146,11 @@ class PhysicsInformedLNNP(DeltaLNNP):
             return out
 
         # Delta-mode checkpoint predicts DeltaU(R); reconstruct total U_hyb(R).
-        u_ref, _ = lj_energy_forces_batched(
+        u_ref, _ = reference_energy_forces_batched(
             z=z,
             pos=pos,
             batch=batch,
+            molecule=self.baseline_molecule,
             epsilon_eV=self.baseline_eps,
             sigma_A=self.baseline_sigma,
             r_cut_A=self.baseline_cutoff,
@@ -403,6 +407,7 @@ def train_physics_informed_model(
 
     model_args = {
         "delta_learning": bool(delta_learning),
+        "baseline_molecule": molecule,
         "baseline_epsilon_eV": float(baseline_epsilon_eV),
         "baseline_sigma_A": float(baseline_sigma_A),
         "baseline_cutoff_A": float(baseline_cutoff_A),

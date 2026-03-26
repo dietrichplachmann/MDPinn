@@ -1,0 +1,72 @@
+{
+  "name": "aspirin_charmm_like_reference",
+  "description": "CHARMM-like parameter library for aspirin reference baseline. Topology is inferred from the first observed aspirin graph and cached separately.",
+  "bond_detection_scale": 1.25,
+  "covalent_radii_A": {
+    "1": 0.31,
+    "6": 0.76,
+    "8": 0.66
+  },
+  "max_valence": {
+    "1": 1,
+    "6": 4,
+    "8": 2
+  },
+  "nonbonded_params": {
+    "C_AR": { "sigma_A": 3.55, "epsilon_eV": 0.0125 },
+    "C_CARBOXY": { "sigma_A": 3.65, "epsilon_eV": 0.0130 },
+    "C_ESTER": { "sigma_A": 3.65, "epsilon_eV": 0.0130 },
+    "C_CT3": { "sigma_A": 3.75, "epsilon_eV": 0.0113 },
+    "O_CO": { "sigma_A": 2.96, "epsilon_eV": 0.0087 },
+    "O_ES": { "sigma_A": 3.02, "epsilon_eV": 0.0078 },
+    "O_OH": { "sigma_A": 3.00, "epsilon_eV": 0.0078 },
+    "H_CA": { "sigma_A": 1.30, "epsilon_eV": 0.0005 },
+    "H_CT": { "sigma_A": 1.34, "epsilon_eV": 0.0005 },
+    "H_OH": { "sigma_A": 0.45, "epsilon_eV": 0.0001 }
+  },
+  "bond_params": [
+    { "types": ["C_AR", "C_AR"], "r0_A": 1.40, "k_bond_kcal_mol_A2": 469.0 },
+    { "types": ["C_AR", "H_CA"], "r0_A": 1.08, "k_bond_kcal_mol_A2": 340.0 },
+    { "types": ["C_AR", "C_CARBOXY"], "r0_A": 1.49, "k_bond_kcal_mol_A2": 305.0 },
+    { "types": ["C_AR", "O_ES"], "r0_A": 1.37, "k_bond_kcal_mol_A2": 358.0 },
+    { "types": ["C_CARBOXY", "O_CO"], "r0_A": 1.23, "k_bond_kcal_mol_A2": 570.0 },
+    { "types": ["C_CARBOXY", "O_OH"], "r0_A": 1.36, "k_bond_kcal_mol_A2": 428.0 },
+    { "types": ["C_ESTER", "O_CO"], "r0_A": 1.22, "k_bond_kcal_mol_A2": 570.0 },
+    { "types": ["C_ESTER", "O_ES"], "r0_A": 1.34, "k_bond_kcal_mol_A2": 400.0 },
+    { "types": ["C_ESTER", "C_CT3"], "r0_A": 1.50, "k_bond_kcal_mol_A2": 310.0 },
+    { "types": ["C_CT3", "H_CT"], "r0_A": 1.11, "k_bond_kcal_mol_A2": 340.0 },
+    { "types": ["O_OH", "H_OH"], "r0_A": 0.96, "k_bond_kcal_mol_A2": 450.0 }
+  ],
+  "angle_params": [
+    { "types": ["C_AR", "C_AR", "C_AR"], "theta0_deg": 120.0, "k_angle_kcal_mol_rad2": 63.0 },
+    { "types": ["H_CA", "C_AR", "C_AR"], "theta0_deg": 120.0, "k_angle_kcal_mol_rad2": 35.0 },
+    { "types": ["C_AR", "C_AR", "C_CARBOXY"], "theta0_deg": 120.0, "k_angle_kcal_mol_rad2": 70.0 },
+    { "types": ["C_AR", "C_AR", "O_ES"], "theta0_deg": 120.0, "k_angle_kcal_mol_rad2": 70.0 },
+    { "types": ["O_CO", "C_CARBOXY", "O_OH"], "theta0_deg": 123.0, "k_angle_kcal_mol_rad2": 80.0 },
+    { "types": ["O_CO", "C_ESTER", "O_ES"], "theta0_deg": 123.0, "k_angle_kcal_mol_rad2": 80.0 },
+    { "types": ["O_CO", "C_ESTER", "C_CT3"], "theta0_deg": 120.0, "k_angle_kcal_mol_rad2": 70.0 },
+    { "types": ["H_CT", "C_CT3", "H_CT"], "theta0_deg": 109.5, "k_angle_kcal_mol_rad2": 35.0 },
+    { "types": ["C_ESTER", "C_CT3", "H_CT"], "theta0_deg": 109.5, "k_angle_kcal_mol_rad2": 40.0 },
+    { "types": ["C_CARBOXY", "O_OH", "H_OH"], "theta0_deg": 108.5, "k_angle_kcal_mol_rad2": 55.0 }
+  ],
+  "proper_torsion_params": [
+    { "types": ["C_AR", "C_AR", "C_CARBOXY", "O_OH"], "periodicity": 2, "phase_deg": 180.0, "k_phi_kcal_mol": 2.5 },
+    { "types": ["C_AR", "C_AR", "C_CARBOXY", "O_CO"], "periodicity": 2, "phase_deg": 180.0, "k_phi_kcal_mol": 2.5 },
+    { "types": ["C_AR", "O_ES", "C_ESTER", "O_CO"], "periodicity": 2, "phase_deg": 180.0, "k_phi_kcal_mol": 3.0 },
+    { "types": ["C_AR", "O_ES", "C_ESTER", "C_CT3"], "periodicity": 2, "phase_deg": 180.0, "k_phi_kcal_mol": 2.5 },
+    { "types": ["O_ES", "C_ESTER", "C_CT3", "H_CT"], "periodicity": 3, "phase_deg": 0.0, "k_phi_kcal_mol": 0.15 },
+    { "types": ["O_CO", "C_ESTER", "C_CT3", "H_CT"], "periodicity": 3, "phase_deg": 0.0, "k_phi_kcal_mol": 0.15 },
+    { "types": ["C_AR", "C_AR", "C_AR", "C_AR"], "periodicity": 2, "phase_deg": 180.0, "k_phi_kcal_mol": 1.8 }
+  ],
+  "improper_torsion_params": [
+    { "types": ["C_CARBOXY", "O_CO", "O_OH", "C_AR"], "periodicity": 2, "phase_deg": 180.0, "k_phi_kcal_mol": 1.1 },
+    { "types": ["C_ESTER", "O_CO", "O_ES", "C_CT3"], "periodicity": 2, "phase_deg": 180.0, "k_phi_kcal_mol": 1.1 },
+    { "types": ["C_AR", "C_AR", "C_AR", "H_CA"], "periodicity": 2, "phase_deg": 180.0, "k_phi_kcal_mol": 0.8 }
+  ],
+  "fallbacks": {
+    "bond": { "r0_A": 1.45, "k_bond_kcal_mol_A2": 250.0 },
+    "angle": { "theta0_deg": 120.0, "k_angle_kcal_mol_rad2": 45.0 },
+    "proper_torsion": { "periodicity": 2, "phase_deg": 180.0, "k_phi_kcal_mol": 0.5 },
+    "improper_torsion": { "periodicity": 2, "phase_deg": 180.0, "k_phi_kcal_mol": 0.5 }
+  }
+}
