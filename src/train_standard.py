@@ -21,13 +21,13 @@ import torch
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
-from torch.utils.data import random_split
 from torch_geometric.loader import DataLoader as GeometricDataLoader
 
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
 from baseline_potential import lj_energy_forces_batched
+from data_splits import contiguous_split
 
 
 # PyTorch 2.7 checkpoint compatibility.
@@ -156,15 +156,7 @@ def train_standard_model(
     full_dataset = MD17(root="./data", molecules=molecule)
     print(f"Dataset loaded: {len(full_dataset)} samples")
 
-    train_size = int(0.8 * len(full_dataset))
-    val_size = int(0.1 * len(full_dataset))
-    test_size = len(full_dataset) - train_size - val_size
-
-    train_data, val_data, test_data = random_split(
-        full_dataset,
-        [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(seed),
-    )
+    train_data, val_data, test_data = contiguous_split(full_dataset)
 
     train_loader = GeometricDataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     val_loader = GeometricDataLoader(val_data, batch_size=batch_size, num_workers=num_workers)

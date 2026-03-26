@@ -19,7 +19,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
-from torch.utils.data import random_split
 from torch_geometric.loader import DataLoader as GeometricDataLoader
 from tqdm import tqdm
 
@@ -27,6 +26,7 @@ from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
 from baseline_potential import lj_energy_forces_batched
+from data_splits import contiguous_split
 
 
 # PyTorch 2.7 checkpoint compatibility.
@@ -75,15 +75,7 @@ def create_dataset(dataset_name="MD17", molecule="aspirin", data_root="./data"):
         )
     full_dataset = MD17(root=data_root, molecules=molecule)
 
-    train_size = int(0.8 * len(full_dataset))
-    val_size = int(0.1 * len(full_dataset))
-    test_size = len(full_dataset) - train_size - val_size
-
-    train_data, val_data, test_data = random_split(
-        full_dataset,
-        [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(42),
-    )
+    train_data, val_data, test_data = contiguous_split(full_dataset)
     return train_data, val_data, test_data, full_dataset
 
 

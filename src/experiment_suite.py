@@ -18,10 +18,10 @@ from copy import deepcopy
 from pathlib import Path
 
 import torch
-from torch.utils.data import random_split
 from torchmdnet.datasets import MD17
 
 from compare_models import compare_models
+from data_splits import contiguous_split
 from rollout_nve import load_lnnp_from_ckpt, get_atomic_masses, velocity_verlet_rollout
 from train_physics import train_physics_informed_model
 from train_standard import train_standard_model
@@ -290,14 +290,7 @@ def run_rollout_summary(
     model = load_lnnp_from_ckpt(str(ckpt_path), device=device)
 
     full = MD17(root=data_root, molecules=molecule)
-    train_size = int(0.8 * len(full))
-    val_size = int(0.1 * len(full))
-    test_size = len(full) - train_size - val_size
-    _, _, test_data = random_split(
-        full,
-        [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(42),
-    )
+    _, _, test_data = contiguous_split(full)
 
     test_indices = sorted(list(test_data.indices))
     test_start_indices = [i for i in test_indices if (i + 1) < len(full)]

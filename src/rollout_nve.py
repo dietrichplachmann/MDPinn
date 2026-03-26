@@ -17,12 +17,11 @@ import json
 from pathlib import Path
 
 import torch
-from torch.utils.data import random_split
-
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
 from baseline_potential import lj_energy_forces_batched
+from data_splits import contiguous_split
 
 
 # PyTorch 2.7 checkpoint compatibility.
@@ -248,14 +247,7 @@ def main():
 
     full = MD17(root=args.data_root, molecules=args.molecule)
 
-    train_size = int(0.8 * len(full))
-    val_size = int(0.1 * len(full))
-    test_size = len(full) - train_size - val_size
-    _, _, test_data = random_split(
-        full,
-        [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(42),
-    )
+    _, _, test_data = contiguous_split(full)
 
     test_indices = sorted(list(test_data.indices))
     test_start_indices = [i for i in test_indices if (i + 1) < len(full)]

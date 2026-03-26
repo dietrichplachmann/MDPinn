@@ -19,13 +19,13 @@ import torch
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
-from torch.utils.data import random_split
 from torch_geometric.loader import DataLoader as GeometricDataLoader
 
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
 from baseline_potential import lj_energy_forces_batched
+from data_splits import contiguous_split
 from physics_losses import (
     momentum_symmetry_loss,
     nve_loss_from_trajectory,
@@ -108,7 +108,8 @@ class PhysicsInformedLNNP(DeltaLNNP):
         # Keep the training-side trajectory timestep aligned with rollout/eval.
         self.nve_dt_fs = float(hparams.get("nve_dt_fs", 0.5))
 
-        self.full_dataset = None
+        self.trajectory_dataset = None
+        self.trajectory_start_indices = []
         self.train_batch_counter = 0
 
     def _effective_nve_weight(self):
@@ -239,16 +240,11 @@ class PhysicsInformedLNNP(DeltaLNNP):
         In delta mode that means baseline + learned residual, matching the
         deployed hybrid potential rather than just DeltaU alone.
         """
-        if self.full_dataset is None:
+        if self.trajectory_dataset is None or not self.trajectory_start_indices:
             return torch.tensor(0.0, device=self.device)
 
-        dataset_size = len(self.full_dataset)
-        max_start = dataset_size - self.traj_length
-        if max_start <= 0:
-            return torch.tensor(0.0, device=self.device)
-
-        start_idx = (batch_idx * 137) % max_start
-        traj_batch = build_trajectory_batch(self.full_dataset, start_idx, self.traj_length, self.device)
+        start_idx = self.trajectory_start_indices[(batch_idx * 137) % len(self.trajectory_start_indices)]
+        traj_batch = build_trajectory_batch(self.trajectory_dataset, start_idx, self.traj_length, self.device)
 
         # Wrap absolute-energy predictor to match expected callable signature
         # expected by nve_loss_from_trajectory(...).
@@ -264,6 +260,8 @@ class PhysicsInformedLNNP(DeltaLNNP):
                     self.device,
                     masses=masses,
                     dt=self.nve_dt_fs,
+                    relative=self.nve_relative,
+                    eps=self.nve_relative_eps,
                 )
 
             if self.nve_loss_mode != "potential_only":
@@ -309,6 +307,27 @@ class PhysicsInformedLNNP(DeltaLNNP):
             return None
 
         return None
+
+
+def _contiguous_train_starts(train_subset, traj_length):
+    """Return start indices whose full trajectory window stays inside the train split.
+
+    `random_split` returns a Subset with shuffled sample indices, which is fine for
+    supervised regression but not for NVE windows that require consecutive frames.
+    This helper finds windows on the underlying MD17 trajectory where every frame in
+    the window belongs to the training subset.
+    """
+    if not hasattr(train_subset, "indices"):
+        return []
+
+    train_indices = sorted(int(idx) for idx in train_subset.indices)
+    train_index_set = set(train_indices)
+    starts = []
+    for start_idx in train_indices:
+        end_idx = start_idx + traj_length
+        if all(frame_idx in train_index_set for frame_idx in range(start_idx, end_idx)):
+            starts.append(start_idx)
+    return starts
 
 
 def train_physics_informed_model(
@@ -376,15 +395,7 @@ def train_physics_informed_model(
 
     full_dataset = MD17(root="./data", molecules=molecule)
 
-    train_size = int(0.8 * len(full_dataset))
-    val_size = int(0.1 * len(full_dataset))
-    test_size = len(full_dataset) - train_size - val_size
-
-    train_data, val_data, test_data = random_split(
-        full_dataset,
-        [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(seed),
-    )
+    train_data, val_data, test_data = contiguous_split(full_dataset)
 
     train_loader = GeometricDataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     val_loader = GeometricDataLoader(val_data, batch_size=batch_size, num_workers=num_workers)
@@ -453,7 +464,8 @@ def train_physics_informed_model(
 
     # PhysicsInformedLNNP includes both delta label handling and physics losses.
     model = PhysicsInformedLNNP(model_args)
-    model.full_dataset = full_dataset
+    model.trajectory_dataset = full_dataset
+    model.trajectory_start_indices = _contiguous_train_starts(train_data, traj_length)
 
     checkpoint_callback = ModelCheckpoint(
         monitor="val_total_mse_loss",
