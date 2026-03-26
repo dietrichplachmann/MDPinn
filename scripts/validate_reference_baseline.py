@@ -21,6 +21,10 @@ from torchmdnet.datasets import MD17
 from baseline_potential import reference_energy_forces_batched
 from data_splits import contiguous_split
 
+# PyTorch 2.6+ compatibility for TorchMD-Net processed dataset files.
+_original_load = torch.load
+torch.load = lambda *args, **kwargs: _original_load(*args, **{**kwargs, "weights_only": False})
+
 
 def summarize_errors(values):
     values = [float(v) for v in values]
