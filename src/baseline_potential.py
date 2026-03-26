@@ -2,18 +2,15 @@
 """
 Analytic baseline potentials used by delta-learning.
 
-Two modes exist:
-- Aspirin reference mode: CHARMM-like bonded + typed LJ + fixed-charge Coulomb.
-- Fallback mode: simple Lennard-Jones 12-6 with cutoff.
+Primary mode:
+- Aspirin baseline parsed from the uploaded GROMACS/CHARMM36+CGenFF files.
 
-The aspirin reference is derived once from the first observed aspirin graph and
-cached under `data/aspirin_topology_cache.json` so it plugs into the existing
-training/evaluation loops without a separate preprocessing step.
+Fallback mode:
+- Simple Lennard-Jones 12-6 with cutoff for unsupported molecules.
 """
 
 from __future__ import annotations
 
-import json
 from functools import lru_cache
 from pathlib import Path
 
@@ -21,323 +18,198 @@ import torch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ASPIRIN_REFERENCE_PATH = PROJECT_ROOT / "data" / "aspirin_charmm_reference.json"
-ASPIRIN_TOPOLOGY_CACHE_PATH = PROJECT_ROOT / "data" / "aspirin_topology_cache.json"
-KCAL_MOL_TO_EV = 0.0433641153
-COULOMB_CONSTANT_EV_A = 14.3996454784255
-
-_TOPOLOGY_CACHE = {}
-
-
-def _to_serializable(value):
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu().tolist()
-    return value
+DATA_ROOT = PROJECT_ROOT / "data"
+ASPIRIN_TOP = DATA_ROOT / "aspirin_gmx.top"
+CHARMM36_DIR = DATA_ROOT / "charmm36.ff"
+FF_BONDED = CHARMM36_DIR / "ffbonded.itp"
+FF_NONBONDED = CHARMM36_DIR / "ffnonbonded.itp"
+ASP_FF_BONDED = CHARMM36_DIR / "asp_ffbonded.itp"
+KJMOL_TO_EV = 0.01036427230133138
 
 
-@lru_cache(maxsize=4)
-def _load_json(path: str) -> dict:
+def _strip_comment(line: str) -> str:
+    return line.split(";", 1)[0].strip()
+
+
+def _read_gmx_sections(path: Path) -> dict[str, list[list[str]]]:
+    sections: dict[str, list[list[str]]] = {}
+    current = None
     with open(path, "r") as handle:
-        return json.load(handle)
+        for raw_line in handle:
+            line = _strip_comment(raw_line)
+            if not line:
+                continue
+            if line.startswith("#"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                current = line.strip("[]").strip().lower()
+                sections.setdefault(current, [])
+                continue
+            if current is None:
+                continue
+            sections[current].append(line.split())
+    return sections
 
 
-def _write_json(path: Path, payload: dict):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as handle:
-        json.dump(payload, handle, indent=2)
+def _append_section_entries(target: dict[str, list[list[str]]], path: Path):
+    parsed = _read_gmx_sections(path)
+    for section, entries in parsed.items():
+        target.setdefault(section, []).extend(entries)
+
+
+def _periodic_table() -> dict[str, int]:
+    return {
+        "H": 1,
+        "C": 6,
+        "N": 7,
+        "O": 8,
+        "F": 9,
+        "P": 15,
+        "S": 16,
+        "CL": 17,
+        "BR": 35,
+        "I": 53,
+    }
+
+
+def _element_from_atomtype(atomtype: str) -> int:
+    token = atomtype.upper()
+    if token.startswith("CL"):
+        return 17
+    if token.startswith("BR"):
+        return 35
+    if token.startswith("NA"):
+        return 11
+    if token.startswith("MG"):
+        return 12
+    if token.startswith("CA") and token not in {"CA", "CAD", "CAI", "CAP", "CAL"}:
+        return 20
+    symbol = token[0]
+    return _periodic_table().get(symbol, 0)
+
+
+def _bond_key(a: str, b: str) -> tuple[str, str]:
+    return tuple(sorted((a, b)))
+
+
+def _angle_key(a: str, b: str, c: str) -> tuple[str, str, str]:
+    forward = (a, b, c)
+    reverse = (c, b, a)
+    return forward if forward <= reverse else reverse
+
+
+def _match_dihedral(entry_types: tuple[str, ...], query: tuple[str, ...]) -> bool:
+    return all(e == q or e.upper() == "X" for e, q in zip(entry_types, query))
+
+
+def _dihedral_score(entry_types: tuple[str, ...], query: tuple[str, ...]) -> int:
+    return sum(1 for e, q in zip(entry_types, query) if e == q)
 
 
 @lru_cache(maxsize=1)
-def _aspirin_reference_library() -> dict:
-    return _load_json(str(ASPIRIN_REFERENCE_PATH))
+def _load_aspirin_forcefield() -> dict:
+    if not ASPIRIN_TOP.exists():
+        raise FileNotFoundError(f"Missing aspirin topology: {ASPIRIN_TOP}")
 
+    top_sections = _read_gmx_sections(ASPIRIN_TOP)
+    ff_sections: dict[str, list[list[str]]] = {}
+    _append_section_entries(ff_sections, FF_BONDED)
+    _append_section_entries(ff_sections, ASP_FF_BONDED)
+    _append_section_entries(ff_sections, FF_NONBONDED)
 
-def _fallback_if_needed(molecule: str | None) -> bool:
-    return (molecule or "").lower() != "aspirin" or not ASPIRIN_REFERENCE_PATH.exists()
+    atoms = []
+    atomtypes = []
+    charges = []
+    masses = []
+    z_numbers = []
+    for entry in top_sections.get("atoms", []):
+        atomtype = entry[1]
+        atomtypes.append(atomtype)
+        charges.append(float(entry[6]))
+        masses.append(float(entry[7]))
+        atoms.append(entry[4])
+        z_numbers.append(_element_from_atomtype(atomtype))
 
+    bonds = [(int(e[0]) - 1, int(e[1]) - 1, int(e[2])) for e in top_sections.get("bonds", [])]
+    pairs = {tuple(sorted((int(e[0]) - 1, int(e[1]) - 1))) for e in top_sections.get("pairs", [])}
+    angles = [(int(e[0]) - 1, int(e[1]) - 1, int(e[2]) - 1, int(e[3])) for e in top_sections.get("angles", [])]
 
-def _pairwise_distances(pos: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    rij = pos[:, None, :] - pos[None, :, :]
-    distances = torch.sqrt(torch.clamp((rij * rij).sum(dim=-1), min=1e-12))
-    return rij, distances
+    proper_dihedrals = []
+    improper_dihedrals = []
+    for entry in top_sections.get("dihedrals", []):
+        item = (int(entry[0]) - 1, int(entry[1]) - 1, int(entry[2]) - 1, int(entry[3]) - 1, int(entry[4]))
+        if item[4] == 9:
+            proper_dihedrals.append(item)
+        elif item[4] == 2:
+            improper_dihedrals.append(item)
 
+    bondtypes = {}
+    for entry in ff_sections.get("bondtypes", []):
+        bondtypes[_bond_key(entry[0], entry[1])] = {
+            "func": int(entry[2]),
+            "b0_nm": float(entry[3]),
+            "kb_kjmol_nm2": float(entry[4]),
+        }
 
-def _infer_bonds(z: torch.Tensor, pos: torch.Tensor, library: dict) -> list[tuple[int, int]]:
-    radii = {int(k): float(v) for k, v in library["covalent_radii_A"].items()}
-    max_valence = {int(k): int(v) for k, v in library["max_valence"].items()}
-    scale = float(library.get("bond_detection_scale", 1.25))
+    angletypes = {}
+    for entry in ff_sections.get("angletypes", []):
+        angletypes[_angle_key(entry[0], entry[1], entry[2])] = {
+            "func": int(entry[3]),
+            "theta0_deg": float(entry[4]),
+            "k_theta_kjmol_rad2": float(entry[5]),
+            "ub0_nm": float(entry[6]) if len(entry) > 6 else 0.0,
+            "kub_kjmol_nm2": float(entry[7]) if len(entry) > 7 else 0.0,
+        }
 
-    _, distances = _pairwise_distances(pos)
-    n_atoms = int(z.numel())
-    candidates = []
-    for i in range(n_atoms):
-        zi = int(z[i].item())
-        for j in range(i + 1, n_atoms):
-            zj = int(z[j].item())
-            threshold = scale * (radii.get(zi, 0.7) + radii.get(zj, 0.7))
-            d_ij = float(distances[i, j].item())
-            if d_ij <= threshold:
-                candidates.append((d_ij, i, j))
+    proper_types = []
+    improper_types = []
+    for entry in ff_sections.get("dihedraltypes", []):
+        record = {
+            "types": tuple(entry[:4]),
+            "func": int(entry[4]),
+            "phi0_deg": float(entry[5]),
+            "k_phi_kjmol": float(entry[6]),
+        }
+        if record["func"] == 9:
+            record["mult"] = int(entry[7])
+            proper_types.append(record)
+        elif record["func"] == 2:
+            improper_types.append(record)
 
-    candidates.sort(key=lambda item: item[0])
-    degrees = [0 for _ in range(n_atoms)]
-    bonds = []
-    for _, i, j in candidates:
-        if degrees[i] >= max_valence.get(int(z[i].item()), 4):
-            continue
-        if degrees[j] >= max_valence.get(int(z[j].item()), 4):
-            continue
-        bonds.append((i, j))
-        degrees[i] += 1
-        degrees[j] += 1
-    return bonds
+    nonbonded = {}
+    for entry in ff_sections.get("atomtypes", []):
+        nonbonded[entry[0]] = {
+            "sigma_nm": float(entry[5]),
+            "epsilon_kjmol": float(entry[6]),
+        }
 
-
-def _build_neighbors(n_atoms: int, bonds: list[tuple[int, int]]) -> dict[int, list[int]]:
-    neighbors = {idx: [] for idx in range(n_atoms)}
-    for i, j in bonds:
-        neighbors[i].append(j)
-        neighbors[j].append(i)
-    return neighbors
-
-
-def _find_carbonyl_carbons(z: torch.Tensor, neighbors: dict[int, list[int]]) -> set[int]:
-    carbonyl = set()
-    for idx in range(int(z.numel())):
-        if int(z[idx].item()) != 6:
-            continue
-        oxygen_neighbors = [nbr for nbr in neighbors[idx] if int(z[nbr].item()) == 8]
-        if len(oxygen_neighbors) >= 2:
-            carbonyl.add(idx)
-    return carbonyl
-
-
-def _assign_atom_types(z: torch.Tensor, neighbors: dict[int, list[int]]) -> tuple[list[str], list[float]]:
-    carbonyl_carbons = _find_carbonyl_carbons(z, neighbors)
-    atom_types = ["" for _ in range(int(z.numel()))]
-    charges = [0.0 for _ in range(int(z.numel()))]
-
-    for idx in range(int(z.numel())):
-        zi = int(z[idx].item())
-        nbrs = neighbors[idx]
-        nbr_z = [int(z[nbr].item()) for nbr in nbrs]
-
-        if zi == 1:
-            heavy = next((nbr for nbr in nbrs if int(z[nbr].item()) != 1), None)
-            if heavy is None:
-                atom_types[idx] = "H"
-                charges[idx] = 0.0
-            elif int(z[heavy].item()) == 8:
-                atom_types[idx] = "H_OH"
-                charges[idx] = 0.42
-            elif int(z[heavy].item()) == 6 and len(neighbors[heavy]) == 4:
-                atom_types[idx] = "H_CT"
-                charges[idx] = 0.09
-            else:
-                atom_types[idx] = "H_CA"
-                charges[idx] = 0.115
-            continue
-
-        if zi == 8:
-            if any(int(z[nbr].item()) == 1 for nbr in nbrs):
-                atom_types[idx] = "O_OH"
-                charges[idx] = -0.65
-            elif any(nbr in carbonyl_carbons for nbr in nbrs) and len(nbrs) == 1:
-                atom_types[idx] = "O_CO"
-                charges[idx] = -0.55
-            else:
-                atom_types[idx] = "O_ES"
-                charges[idx] = -0.32
-            continue
-
-        if zi == 6:
-            if idx in carbonyl_carbons:
-                if any(
-                    int(z[nbr].item()) == 8 and any(int(z[n2].item()) == 1 for n2 in neighbors[nbr])
-                    for nbr in nbrs
-                ):
-                    atom_types[idx] = "C_CARBOXY"
-                    charges[idx] = 0.76
-                else:
-                    atom_types[idx] = "C_ESTER"
-                    charges[idx] = 0.74
-            elif nbr_z.count(1) == 3:
-                atom_types[idx] = "C_CT3"
-                charges[idx] = -0.27
-            else:
-                atom_types[idx] = "C_AR"
-                if any(int(z[nbr].item()) == 8 for nbr in nbrs):
-                    charges[idx] = 0.18
-                elif any(nbr in carbonyl_carbons for nbr in nbrs):
-                    charges[idx] = 0.16
-                else:
-                    charges[idx] = -0.12
-            continue
-
-        atom_types[idx] = "X"
-        charges[idx] = 0.0
-
-    return atom_types, charges
-
-
-def _enumerate_angles(neighbors: dict[int, list[int]]) -> list[tuple[int, int, int]]:
-    angles = set()
-    for center, nbrs in neighbors.items():
-        nbrs_sorted = sorted(nbrs)
-        for i_idx in range(len(nbrs_sorted)):
-            for k_idx in range(i_idx + 1, len(nbrs_sorted)):
-                angles.add((nbrs_sorted[i_idx], center, nbrs_sorted[k_idx]))
-    return sorted(angles)
-
-
-def _enumerate_propers(neighbors: dict[int, list[int]]) -> list[tuple[int, int, int, int]]:
-    torsions = set()
-    for j, k_nbrs in neighbors.items():
-        for k in k_nbrs:
-            if j > k:
-                continue
-            left = [i for i in neighbors[j] if i != k]
-            right = [l for l in neighbors[k] if l != j]
-            for i in left:
-                for l in right:
-                    torsion = (i, j, k, l)
-                    reverse = (l, k, j, i)
-                    torsions.add(min(torsion, reverse))
-    return sorted(torsions)
-
-
-def _enumerate_impropers(z: torch.Tensor, neighbors: dict[int, list[int]]) -> list[tuple[int, int, int, int]]:
-    impropers = []
-    for center, nbrs in neighbors.items():
-        if len(nbrs) != 3:
-            continue
-        z_center = int(z[center].item())
-        if z_center == 6:
-            impropers.append((center, nbrs[0], nbrs[1], nbrs[2]))
-    return sorted(impropers)
-
-
-def _make_exclusions(neighbors: dict[int, list[int]]) -> set[tuple[int, int]]:
-    excluded = set()
-    for i, nbrs in neighbors.items():
-        for j in nbrs:
-            excluded.add(tuple(sorted((i, j))))
-        for j in nbrs:
-            for k in neighbors[j]:
-                if k == i:
-                    continue
-                excluded.add(tuple(sorted((i, k))))
-        for j in nbrs:
-            for k in neighbors[j]:
-                if k == i:
-                    continue
-                for l in neighbors[k]:
-                    if l in (j, i):
-                        continue
-                    excluded.add(tuple(sorted((i, l))))
-    return excluded
-
-
-def _parameter_table_by_key(table: list[dict], value_key: str) -> dict[tuple, dict]:
-    result = {}
-    for entry in table:
-        key = tuple(entry["types"])
-        result[key] = entry
-        result[tuple(reversed(key))] = entry
-    result["_value_key"] = value_key
-    return result
-
-
-def _lookup_pair_param(table: dict, t1: str, t2: str, fallback: dict) -> dict:
-    return table.get((t1, t2), fallback)
-
-
-def _lookup_triple_param(table: dict, t1: str, t2: str, t3: str, fallback: dict) -> dict:
-    return table.get((t1, t2, t3), fallback)
-
-
-def _lookup_quad_param(table: dict, t1: str, t2: str, t3: str, t4: str, fallback: dict) -> dict:
-    return table.get((t1, t2, t3, t4), fallback)
-
-
-def _derive_aspirin_topology(z: torch.Tensor, pos: torch.Tensor) -> dict:
-    library = _aspirin_reference_library()
-    bonds = _infer_bonds(z, pos, library)
-    neighbors = _build_neighbors(int(z.numel()), bonds)
-    atom_types, charges = _assign_atom_types(z, neighbors)
-    topology = {
-        "atom_types": atom_types,
+    z_signature = tuple(z_numbers)
+    return {
+        "z": z_signature,
+        "atom_names": atoms,
+        "atom_types": atomtypes,
         "charges": charges,
+        "masses": masses,
         "bonds": bonds,
-        "angles": _enumerate_angles(neighbors),
-        "propers": _enumerate_propers(neighbors),
-        "impropers": _enumerate_impropers(z, neighbors),
-        "exclusions": sorted(list(_make_exclusions(neighbors))),
+        "pairs": pairs,
+        "angles": angles,
+        "proper_dihedrals": proper_dihedrals,
+        "improper_dihedrals": improper_dihedrals,
+        "bondtypes": bondtypes,
+        "angletypes": angletypes,
+        "proper_types": proper_types,
+        "improper_types": improper_types,
+        "nonbonded": nonbonded,
     }
-    payload = {
-        "z": z.detach().cpu().tolist(),
-        **topology,
-    }
-    _write_json(ASPIRIN_TOPOLOGY_CACHE_PATH, payload)
-    return topology
 
 
-def _load_or_create_aspirin_topology(z: torch.Tensor, pos: torch.Tensor) -> dict:
-    key = ("aspirin", tuple(int(v) for v in z.detach().cpu().tolist()))
-    if key in _TOPOLOGY_CACHE:
-        return _TOPOLOGY_CACHE[key]
-
-    if ASPIRIN_TOPOLOGY_CACHE_PATH.exists():
-        cached = _load_json(str(ASPIRIN_TOPOLOGY_CACHE_PATH))
-        if tuple(int(v) for v in cached.get("z", [])) == key[1]:
-            topology = {
-                "atom_types": cached["atom_types"],
-                "charges": cached["charges"],
-                "bonds": [tuple(item) for item in cached["bonds"]],
-                "angles": [tuple(item) for item in cached["angles"]],
-                "propers": [tuple(item) for item in cached["propers"]],
-                "impropers": [tuple(item) for item in cached["impropers"]],
-                "exclusions": {tuple(item) for item in cached["exclusions"]},
-            }
-            _TOPOLOGY_CACHE[key] = topology
-            return topology
-
-    topology = _derive_aspirin_topology(z, pos)
-    topology["exclusions"] = {tuple(item) for item in topology["exclusions"]}
-    _TOPOLOGY_CACHE[key] = topology
-    return topology
-
-
-def _get_box_lengths(box_l, device, dtype):
-    if box_l is None:
-        return None
-    if not isinstance(box_l, torch.Tensor):
-        box_l = torch.as_tensor(box_l, device=device, dtype=dtype)
-    return box_l.to(device=device, dtype=dtype)
-
-
-def _minimum_image(delta: torch.Tensor, box_l: torch.Tensor | None) -> torch.Tensor:
-    if box_l is None:
-        return delta
-    box = box_l.view(1, 1, 3)
-    return delta - box * torch.round(delta / box.clamp(min=1e-12))
-
-
-def _bond_energy(pos: torch.Tensor, topology: dict, library: dict) -> torch.Tensor:
-    if not topology["bonds"]:
-        return torch.zeros((), device=pos.device, dtype=pos.dtype)
-
-    param_table = _parameter_table_by_key(library["bond_params"], "k_bond_kcal_mol_A2")
-    fallback = library["fallbacks"]["bond"]
-    energy = torch.zeros((), device=pos.device, dtype=pos.dtype)
-    atom_types = topology["atom_types"]
-    for i, j in topology["bonds"]:
-        delta = pos[i] - pos[j]
-        dist = torch.sqrt(torch.clamp((delta * delta).sum(), min=1e-12))
-        params = _lookup_pair_param(param_table, atom_types[i], atom_types[j], fallback)
-        k_bond = float(params["k_bond_kcal_mol_A2"]) * KCAL_MOL_TO_EV
-        r0 = float(params["r0_A"])
-        energy = energy + 0.5 * k_bond * (dist - r0) ** 2
+def _bond_energy(pos_nm: torch.Tensor, ff: dict) -> torch.Tensor:
+    energy = torch.zeros((), device=pos_nm.device, dtype=pos_nm.dtype)
+    atom_types = ff["atom_types"]
+    for i, j, _ in ff["bonds"]:
+        params = ff["bondtypes"][_bond_key(atom_types[i], atom_types[j])]
+        dist = torch.linalg.norm(pos_nm[i] - pos_nm[j]).clamp(min=1e-12)
+        energy = energy + 0.5 * params["kb_kjmol_nm2"] * (dist - params["b0_nm"]) ** 2
     return energy
 
 
@@ -346,20 +218,17 @@ def _angle_value(v1: torch.Tensor, v2: torch.Tensor) -> torch.Tensor:
     return torch.acos(torch.clamp(cos_theta, -1.0, 1.0))
 
 
-def _angle_energy(pos: torch.Tensor, topology: dict, library: dict) -> torch.Tensor:
-    if not topology["angles"]:
-        return torch.zeros((), device=pos.device, dtype=pos.dtype)
-
-    param_table = _parameter_table_by_key(library["angle_params"], "k_angle_kcal_mol_rad2")
-    fallback = library["fallbacks"]["angle"]
-    energy = torch.zeros((), device=pos.device, dtype=pos.dtype)
-    atom_types = topology["atom_types"]
-    for i, j, k in topology["angles"]:
-        theta = _angle_value(pos[i] - pos[j], pos[k] - pos[j])
-        params = _lookup_triple_param(param_table, atom_types[i], atom_types[j], atom_types[k], fallback)
-        k_theta = float(params["k_angle_kcal_mol_rad2"]) * KCAL_MOL_TO_EV
-        theta0 = torch.deg2rad(torch.tensor(float(params["theta0_deg"]), device=pos.device, dtype=pos.dtype))
-        energy = energy + 0.5 * k_theta * (theta - theta0) ** 2
+def _angle_energy(pos_nm: torch.Tensor, ff: dict) -> torch.Tensor:
+    energy = torch.zeros((), device=pos_nm.device, dtype=pos_nm.dtype)
+    atom_types = ff["atom_types"]
+    for i, j, k, _ in ff["angles"]:
+        params = ff["angletypes"][_angle_key(atom_types[i], atom_types[j], atom_types[k])]
+        theta = _angle_value(pos_nm[i] - pos_nm[j], pos_nm[k] - pos_nm[j])
+        theta0 = torch.deg2rad(torch.tensor(params["theta0_deg"], device=pos_nm.device, dtype=pos_nm.dtype))
+        energy = energy + 0.5 * params["k_theta_kjmol_rad2"] * (theta - theta0) ** 2
+        if params["kub_kjmol_nm2"] > 0 and params["ub0_nm"] > 0:
+            ub = torch.linalg.norm(pos_nm[i] - pos_nm[k]).clamp(min=1e-12)
+            energy = energy + 0.5 * params["kub_kjmol_nm2"] * (ub - params["ub0_nm"]) ** 2
     return energy
 
 
@@ -367,78 +236,111 @@ def _dihedral_angle(p0, p1, p2, p3):
     b0 = p0 - p1
     b1 = p2 - p1
     b2 = p3 - p2
-
     b1n = b1 / torch.linalg.norm(b1).clamp(min=1e-12)
     v = b0 - torch.dot(b0, b1n) * b1n
     w = b2 - torch.dot(b2, b1n) * b1n
-
     x = torch.dot(v, w)
     y = torch.dot(torch.cross(b1n, v, dim=0), w)
     return torch.atan2(y, x)
 
 
-def _torsion_energy(pos: torch.Tensor, terms: list[tuple[int, int, int, int]], topology: dict, table_key: str, fallback_key: str, library: dict) -> torch.Tensor:
-    if not terms:
-        return torch.zeros((), device=pos.device, dtype=pos.dtype)
+def _match_terms(type_list: list[dict], query: tuple[str, str, str, str], func: int) -> list[dict]:
+    candidates = []
+    for entry in type_list:
+        if entry["func"] != func:
+            continue
+        if _match_dihedral(entry["types"], query):
+            candidates.append((entry, _dihedral_score(entry["types"], query)))
+    if not candidates:
+        return []
+    best_score = max(score for _, score in candidates)
+    return [entry for entry, score in candidates if score == best_score]
 
-    param_table = _parameter_table_by_key(library[table_key], "k_phi_kcal_mol")
-    fallback = library["fallbacks"][fallback_key]
-    atom_types = topology["atom_types"]
-    energy = torch.zeros((), device=pos.device, dtype=pos.dtype)
-    for i, j, k, l in terms:
-        phi = _dihedral_angle(pos[i], pos[j], pos[k], pos[l])
-        params = _lookup_quad_param(param_table, atom_types[i], atom_types[j], atom_types[k], atom_types[l], fallback)
-        k_phi = float(params["k_phi_kcal_mol"]) * KCAL_MOL_TO_EV
-        periodicity = int(params["periodicity"])
-        phase = torch.deg2rad(torch.tensor(float(params["phase_deg"]), device=pos.device, dtype=pos.dtype))
-        energy = energy + k_phi * (1.0 + torch.cos(periodicity * phi - phase))
+
+def _proper_dihedral_energy(pos_nm: torch.Tensor, ff: dict) -> torch.Tensor:
+    energy = torch.zeros((), device=pos_nm.device, dtype=pos_nm.dtype)
+    atom_types = ff["atom_types"]
+    for i, j, k, l, func in ff["proper_dihedrals"]:
+        query = (atom_types[i], atom_types[j], atom_types[k], atom_types[l])
+        terms = _match_terms(ff["proper_types"], query, func)
+        if not terms:
+            terms = _match_terms(ff["proper_types"], tuple(reversed(query)), func)
+        if not terms:
+            continue
+        phi = _dihedral_angle(pos_nm[i], pos_nm[j], pos_nm[k], pos_nm[l])
+        for term in terms:
+            phi0 = torch.deg2rad(torch.tensor(term["phi0_deg"], device=pos_nm.device, dtype=pos_nm.dtype))
+            energy = energy + term["k_phi_kjmol"] * (1.0 + torch.cos(term["mult"] * phi - phi0))
     return energy
 
 
-def _nonbonded_energy(pos: torch.Tensor, topology: dict, library: dict, box_l=None) -> torch.Tensor:
-    atom_types = topology["atom_types"]
-    charges = torch.as_tensor(topology["charges"], device=pos.device, dtype=pos.dtype)
-    nb_params = library["nonbonded_params"]
-    exclusions = topology["exclusions"]
+def _improper_dihedral_energy(pos_nm: torch.Tensor, ff: dict) -> torch.Tensor:
+    energy = torch.zeros((), device=pos_nm.device, dtype=pos_nm.dtype)
+    atom_types = ff["atom_types"]
+    for i, j, k, l, func in ff["improper_dihedrals"]:
+        query = (atom_types[i], atom_types[j], atom_types[k], atom_types[l])
+        terms = _match_terms(ff["improper_types"], query, func)
+        if not terms:
+            terms = _match_terms(ff["improper_types"], tuple(reversed(query)), func)
+        if not terms:
+            continue
+        phi = _dihedral_angle(pos_nm[i], pos_nm[j], pos_nm[k], pos_nm[l])
+        for term in terms:
+            phi0 = torch.deg2rad(torch.tensor(term["phi0_deg"], device=pos_nm.device, dtype=pos_nm.dtype))
+            energy = energy + 0.5 * term["k_phi_kjmol"] * (phi - phi0) ** 2
+    return energy
 
-    energy = torch.zeros((), device=pos.device, dtype=pos.dtype)
-    n_atoms = pos.shape[0]
-    box = _get_box_lengths(box_l, pos.device, pos.dtype)
+
+def _minimum_image(delta_nm: torch.Tensor, box_nm: torch.Tensor | None) -> torch.Tensor:
+    if box_nm is None:
+        return delta_nm
+    return delta_nm - box_nm * torch.round(delta_nm / box_nm.clamp(min=1e-12))
+
+
+def _nonbonded_energy(pos_nm: torch.Tensor, ff: dict, box_l=None) -> torch.Tensor:
+    energy = torch.zeros((), device=pos_nm.device, dtype=pos_nm.dtype)
+    atom_types = ff["atom_types"]
+    charges = torch.as_tensor(ff["charges"], device=pos_nm.device, dtype=pos_nm.dtype)
+    excluded = ff["pairs"]
+    box_nm = None
+    if box_l is not None:
+        box_nm = torch.as_tensor(box_l, device=pos_nm.device, dtype=pos_nm.dtype) * 0.1
+
+    n_atoms = pos_nm.shape[0]
     for i in range(n_atoms):
+        params_i = ff["nonbonded"][atom_types[i]]
         for j in range(i + 1, n_atoms):
-            if tuple(sorted((i, j))) in exclusions:
+            if tuple(sorted((i, j))) in excluded:
                 continue
-            delta = pos[i] - pos[j]
-            if box is not None:
-                delta = delta - box * torch.round(delta / box.clamp(min=1e-12))
-            dist = torch.sqrt(torch.clamp((delta * delta).sum(), min=1e-12))
-            params_i = nb_params[atom_types[i]]
-            params_j = nb_params[atom_types[j]]
-            sigma = 0.5 * (float(params_i["sigma_A"]) + float(params_j["sigma_A"]))
-            epsilon = (float(params_i["epsilon_eV"]) * float(params_j["epsilon_eV"])) ** 0.5
-            if epsilon > 0:
-                sr6 = (sigma / dist) ** 6
-                energy = energy + 4.0 * epsilon * (sr6 * sr6 - sr6)
-            qi = charges[i]
-            qj = charges[j]
-            energy = energy + COULOMB_CONSTANT_EV_A * qi * qj / dist
+            params_j = ff["nonbonded"][atom_types[j]]
+            delta = _minimum_image(pos_nm[i] - pos_nm[j], box_nm)
+            dist = torch.linalg.norm(delta).clamp(min=1e-12)
+            sigma = 0.5 * (params_i["sigma_nm"] + params_j["sigma_nm"])
+            epsilon = (params_i["epsilon_kjmol"] * params_j["epsilon_kjmol"]) ** 0.5
+            sr6 = (sigma / dist) ** 6
+            energy = energy + 4.0 * epsilon * (sr6 * sr6 - sr6)
+            energy = energy + 138.935456 * charges[i] * charges[j] / dist
     return energy
 
 
-def _aspirin_reference_energy_and_forces(pos: torch.Tensor, z: torch.Tensor, box_l=None) -> tuple[torch.Tensor, torch.Tensor]:
-    library = _aspirin_reference_library()
-    topology = _load_or_create_aspirin_topology(z, pos)
-    pos_req = pos.detach().clone().requires_grad_(True)
+def _aspirin_reference_energy_forces(pos: torch.Tensor, z: torch.Tensor, box_l=None) -> tuple[torch.Tensor, torch.Tensor]:
+    ff = _load_aspirin_forcefield()
+    z_signature = tuple(int(v) for v in z.detach().cpu().tolist())
+    if z_signature != ff["z"]:
+        raise ValueError("Input molecule does not match cached aspirin topology.")
 
-    total_energy = (
-        _bond_energy(pos_req, topology, library)
-        + _angle_energy(pos_req, topology, library)
-        + _torsion_energy(pos_req, topology["propers"], topology, "proper_torsion_params", "proper_torsion", library)
-        + _torsion_energy(pos_req, topology["impropers"], topology, "improper_torsion_params", "improper_torsion", library)
-        + _nonbonded_energy(pos_req, topology, library, box_l=box_l)
+    pos_req = pos.detach().clone().requires_grad_(True)
+    pos_nm = pos_req * 0.1
+    energy_kjmol = (
+        _bond_energy(pos_nm, ff)
+        + _angle_energy(pos_nm, ff)
+        + _proper_dihedral_energy(pos_nm, ff)
+        + _improper_dihedral_energy(pos_nm, ff)
+        + _nonbonded_energy(pos_nm, ff, box_l=box_l)
     )
-    forces = -torch.autograd.grad(total_energy, pos_req, create_graph=False, retain_graph=False)[0]
-    return total_energy.detach(), forces.detach()
+    energy_ev = energy_kjmol * KJMOL_TO_EV
+    forces = -torch.autograd.grad(energy_ev, pos_req, create_graph=False, retain_graph=False)[0]
+    return energy_ev.detach(), forces.detach()
 
 
 def lj_energy_forces(
@@ -447,10 +349,8 @@ def lj_energy_forces(
     sigma_A: float = 1.0,
     r_cut_A: float = 5.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute pairwise LJ energy and forces for one molecule (no PBC)."""
     device = pos.device
     dtype = pos.dtype
-
     n_atoms = pos.shape[0]
     if n_atoms <= 1:
         return torch.zeros((), device=device, dtype=dtype), torch.zeros_like(pos)
@@ -460,7 +360,6 @@ def lj_energy_forces(
     triu = torch.triu(torch.ones((n_atoms, n_atoms), device=device, dtype=torch.bool), diagonal=1)
     r = torch.sqrt(torch.clamp(r2, min=1e-12))
     mask = triu & (r < float(r_cut_A))
-
     if not mask.any():
         return torch.zeros((), device=device, dtype=dtype), torch.zeros_like(pos)
 
@@ -468,7 +367,6 @@ def lj_energy_forces(
     rij_sel = rij[mask]
     sig = torch.as_tensor(float(sigma_A), device=device, dtype=dtype)
     eps = torch.as_tensor(float(epsilon_eV), device=device, dtype=dtype)
-
     inv_r = 1.0 / r_sel
     sr = sig * inv_r
     sr2 = sr * sr
@@ -479,14 +377,10 @@ def lj_energy_forces(
 
     coef = -24.0 * eps * (2.0 * sr12 - sr6) * (inv_r * inv_r)
     fij = coef[:, None] * rij_sel
-
     idx = mask.nonzero(as_tuple=False)
-    i_idx = idx[:, 0]
-    j_idx = idx[:, 1]
-
     forces = torch.zeros_like(pos)
-    forces.index_add_(0, i_idx, fij)
-    forces.index_add_(0, j_idx, -fij)
+    forces.index_add_(0, idx[:, 0], fij)
+    forces.index_add_(0, idx[:, 1], -fij)
     return u_total, forces
 
 
@@ -499,10 +393,9 @@ def reference_energy_forces(
     sigma_A: float = 1.0,
     r_cut_A: float = 5.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return analytic baseline energy/forces for one molecule."""
-    if _fallback_if_needed(molecule):
-        return lj_energy_forces(pos, epsilon_eV=epsilon_eV, sigma_A=sigma_A, r_cut_A=r_cut_A)
-    return _aspirin_reference_energy_and_forces(pos, z, box_l=box_l)
+    if (molecule or "").lower() == "aspirin" and ASPIRIN_TOP.exists():
+        return _aspirin_reference_energy_forces(pos, z, box_l=box_l)
+    return lj_energy_forces(pos, epsilon_eV=epsilon_eV, sigma_A=sigma_A, r_cut_A=r_cut_A)
 
 
 def reference_energy_forces_batched(
@@ -515,11 +408,9 @@ def reference_energy_forces_batched(
     sigma_A: float = 1.0,
     r_cut_A: float = 5.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Apply the analytic reference to each graph in a PyG batch."""
     device = pos.device
     dtype = pos.dtype
     unique_graphs = torch.unique(batch)
-
     u_per_graph = torch.zeros((int(unique_graphs.numel()),), device=device, dtype=dtype)
     f_all_atoms = torch.zeros_like(pos)
 
@@ -554,7 +445,6 @@ def lj_energy_forces_batched(
     sigma_A: float = 1.0,
     r_cut_A: float = 5.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Backward-compatible alias used by the existing training/eval code."""
     return reference_energy_forces_batched(
         z=z,
         pos=pos,

@@ -1,0 +1,23 @@
+REMARK FOR GROMPP
+ATOM      1 C1   asp     1       1.743   1.494   0.000  1.00  0.00      XXXX
+ATOM      2 C2   asp     1       1.743   0.498   0.000  1.00  0.00      XXXX
+ATOM      3 C3   asp     1       0.897   1.992   0.000  1.00  0.00      XXXX
+ATOM      4 O4   asp     1       2.590   1.992   0.000  1.00  0.00      XXXX
+ATOM      5 C5   asp     1       0.897   0.000   0.000  1.00  0.00      XXXX
+ATOM      6 C6   asp     1       0.000   1.494   0.000  1.00  0.00      XXXX
+ATOM      7 C7   asp     1       0.897   2.989   0.000  1.00  0.00      XXXX
+ATOM      8 C8   asp     1       0.000   0.498   0.000  1.00  0.00      XXXX
+ATOM      9 O9   asp     1       0.000   3.487   0.000  1.00  0.00      XXXX
+ATOM     10 O10  asp     1       1.743   3.487   0.000  1.00  0.00      XXXX
+ATOM     11 C11  asp     1       3.487   1.494   0.000  1.00  0.00      XXXX
+ATOM     12 O12  asp     1       4.334   1.992   0.000  1.00  0.00      XXXX
+ATOM     13 C13  asp     1       3.487   0.498   0.000  1.00  0.00      XXXX
+ATOM     14 H14  asp     1       2.639  -0.014   0.000  1.00  0.00      XXXX
+ATOM     15 H15  asp     1       0.909  -1.032   0.000  1.00  0.00      XXXX
+ATOM     16 H16  asp     1      -0.889   2.018   0.000  1.00  0.00      XXXX
+ATOM     17 H17  asp     1      -0.889  -0.025   0.000  1.00  0.00      XXXX
+ATOM     18 H18  asp     1       2.559   3.025   0.000  1.00  0.00      XXXX
+ATOM     19 H19  asp     1       2.560  -0.037   0.000  1.00  0.00      XXXX
+ATOM     20 H20  asp     1       4.413  -0.037   0.000  1.00  0.00      XXXX
+ATOM     21 H21  asp     1       3.487  -0.572   0.000  1.00  0.00      XXXX
+END
