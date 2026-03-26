@@ -420,6 +420,16 @@ def _nonbonded_energy(pos_nm: torch.Tensor, ff: dict, box_l=None) -> torch.Tenso
     return energy
 
 
+def _aspirin_component_energies(pos_nm: torch.Tensor, ff: dict, box_l=None) -> dict[str, torch.Tensor]:
+    return {
+        "bond_kjmol": _bond_energy(pos_nm, ff),
+        "angle_kjmol": _angle_energy(pos_nm, ff),
+        "proper_kjmol": _proper_dihedral_energy(pos_nm, ff),
+        "improper_kjmol": _improper_dihedral_energy(pos_nm, ff),
+        "nonbonded_kjmol": _nonbonded_energy(pos_nm, ff, box_l=box_l),
+    }
+
+
 def _aspirin_reference_energy_forces(pos: torch.Tensor, z: torch.Tensor, box_l=None) -> tuple[torch.Tensor, torch.Tensor]:
     ff = _load_aspirin_forcefield()
     ref_to_input = _build_order_mapping(ff, z, pos)
@@ -430,19 +440,26 @@ def _aspirin_reference_energy_forces(pos: torch.Tensor, z: torch.Tensor, box_l=N
     pos_ordered = pos[ref_to_input]
     pos_req = pos_ordered.detach().clone().requires_grad_(True)
     pos_nm = pos_req * 0.1
-    energy_kjmol = (
-        _bond_energy(pos_nm, ff)
-        + _angle_energy(pos_nm, ff)
-        + _proper_dihedral_energy(pos_nm, ff)
-        + _improper_dihedral_energy(pos_nm, ff)
-        + _nonbonded_energy(pos_nm, ff, box_l=box_l)
-    )
+    components = _aspirin_component_energies(pos_nm, ff, box_l=box_l)
+    energy_kjmol = sum(components.values())
     energy_ev = energy_kjmol * KJMOL_TO_EV
     forces_ref = -torch.autograd.grad(energy_ev, pos_req, create_graph=False, retain_graph=False)[0]
     forces_input = torch.zeros_like(pos)
     for input_idx, ref_idx in enumerate(input_to_ref):
         forces_input[input_idx] = forces_ref[ref_idx]
     return energy_ev.detach(), forces_input.detach()
+
+
+def debug_aspirin_reference_components(pos: torch.Tensor, z: torch.Tensor, box_l=None) -> dict[str, torch.Tensor]:
+    """Return per-term aspirin baseline energies on one graph in input atom order."""
+    ff = _load_aspirin_forcefield()
+    _ = _build_order_mapping(ff, z, pos)
+    pos_ordered = pos[_ATOM_ORDER_CACHE[tuple(int(v) for v in z.detach().cpu().tolist())]]
+    pos_nm = pos_ordered.detach().clone() * 0.1
+    components = _aspirin_component_energies(pos_nm, ff, box_l=box_l)
+    components_ev = {key.replace("_kjmol", "_ev"): value * KJMOL_TO_EV for key, value in components.items()}
+    components_ev["total_ev"] = sum(components_ev.values())
+    return {key: value.detach() for key, value in components_ev.items()}
 
 
 def lj_energy_forces(
