@@ -25,6 +25,7 @@ FF_BONDED = CHARMM36_DIR / "ffbonded.itp"
 FF_NONBONDED = CHARMM36_DIR / "ffnonbonded.itp"
 ASP_FF_BONDED = CHARMM36_DIR / "asp_ffbonded.itp"
 KJMOL_TO_EV = 0.01036427230133138
+_ATOM_ORDER_CACHE: dict[tuple[int, ...], list[int]] = {}
 
 
 def _strip_comment(line: str) -> str:
@@ -86,6 +87,32 @@ def _element_from_atomtype(atomtype: str) -> int:
         return 20
     symbol = token[0]
     return _periodic_table().get(symbol, 0)
+
+
+def _covalent_radius_by_z(z: int) -> float:
+    return {
+        1: 0.31,
+        6: 0.76,
+        7: 0.71,
+        8: 0.66,
+        9: 0.57,
+        15: 1.07,
+        16: 1.05,
+        17: 1.02,
+    }.get(z, 0.75)
+
+
+def _max_valence_by_z(z: int) -> int:
+    return {
+        1: 1,
+        6: 4,
+        7: 4,
+        8: 2,
+        9: 1,
+        15: 5,
+        16: 6,
+        17: 1,
+    }.get(z, 4)
 
 
 def _bond_key(a: str, b: str) -> tuple[str, str]:
@@ -201,6 +228,76 @@ def _load_aspirin_forcefield() -> dict:
         "improper_types": improper_types,
         "nonbonded": nonbonded,
     }
+
+
+def _infer_bonds_from_positions(z: tuple[int, ...], pos: torch.Tensor) -> list[tuple[int, int]]:
+    n_atoms = len(z)
+    candidates = []
+    for i in range(n_atoms):
+        zi = z[i]
+        for j in range(i + 1, n_atoms):
+            zj = z[j]
+            threshold = 1.25 * (_covalent_radius_by_z(zi) + _covalent_radius_by_z(zj))
+            dist = float(torch.linalg.norm(pos[i] - pos[j]).item())
+            if dist <= threshold:
+                candidates.append((dist, i, j))
+
+    candidates.sort(key=lambda item: item[0])
+    degrees = [0 for _ in range(n_atoms)]
+    bonds = []
+    for _, i, j in candidates:
+        if degrees[i] >= _max_valence_by_z(z[i]) or degrees[j] >= _max_valence_by_z(z[j]):
+            continue
+        bonds.append((i, j))
+        degrees[i] += 1
+        degrees[j] += 1
+    return bonds
+
+
+def _neighbors_from_bonds(n_atoms: int, bonds: list[tuple[int, int]]) -> list[list[int]]:
+    neighbors = [[] for _ in range(n_atoms)]
+    for i, j in bonds:
+        neighbors[i].append(j)
+        neighbors[j].append(i)
+    for nbrs in neighbors:
+        nbrs.sort()
+    return neighbors
+
+
+def _wl_labels(z_signature: tuple[int, ...], bonds: list[tuple[int, int]], rounds: int = 4) -> list[tuple]:
+    neighbors = _neighbors_from_bonds(len(z_signature), bonds)
+    labels = [(z_signature[idx],) for idx in range(len(z_signature))]
+    for _ in range(rounds):
+        labels = [
+            (labels[idx], tuple(sorted(labels[nbr] for nbr in neighbors[idx])))
+            for idx in range(len(z_signature))
+        ]
+    return labels
+
+
+def _build_order_mapping(ff: dict, z: torch.Tensor, pos: torch.Tensor) -> list[int]:
+    input_signature = tuple(int(v) for v in z.detach().cpu().tolist())
+    cache_key = input_signature
+    if cache_key in _ATOM_ORDER_CACHE:
+        return _ATOM_ORDER_CACHE[cache_key]
+
+    ref_labels = _wl_labels(ff["z"], [(i, j) for i, j, _ in ff["bonds"]])
+    inferred_bonds = _infer_bonds_from_positions(input_signature, pos.detach().cpu())
+    input_labels = _wl_labels(input_signature, inferred_bonds)
+
+    buckets: dict[tuple, list[int]] = {}
+    for idx, label in enumerate(input_labels):
+        buckets.setdefault(label, []).append(idx)
+
+    ref_to_input = [-1] * len(ff["z"])
+    for ref_idx, label in enumerate(ref_labels):
+        candidates = buckets.get(label, [])
+        if not candidates:
+            raise ValueError("Unable to map MD17 aspirin atom order onto CHARMM topology order.")
+        ref_to_input[ref_idx] = candidates.pop(0)
+
+    _ATOM_ORDER_CACHE[cache_key] = ref_to_input
+    return ref_to_input
 
 
 def _bond_energy(pos_nm: torch.Tensor, ff: dict) -> torch.Tensor:
@@ -325,11 +422,13 @@ def _nonbonded_energy(pos_nm: torch.Tensor, ff: dict, box_l=None) -> torch.Tenso
 
 def _aspirin_reference_energy_forces(pos: torch.Tensor, z: torch.Tensor, box_l=None) -> tuple[torch.Tensor, torch.Tensor]:
     ff = _load_aspirin_forcefield()
-    z_signature = tuple(int(v) for v in z.detach().cpu().tolist())
-    if z_signature != ff["z"]:
-        raise ValueError("Input molecule does not match cached aspirin topology.")
+    ref_to_input = _build_order_mapping(ff, z, pos)
+    input_to_ref = [0] * len(ref_to_input)
+    for ref_idx, input_idx in enumerate(ref_to_input):
+        input_to_ref[input_idx] = ref_idx
 
-    pos_req = pos.detach().clone().requires_grad_(True)
+    pos_ordered = pos[ref_to_input]
+    pos_req = pos_ordered.detach().clone().requires_grad_(True)
     pos_nm = pos_req * 0.1
     energy_kjmol = (
         _bond_energy(pos_nm, ff)
@@ -339,8 +438,11 @@ def _aspirin_reference_energy_forces(pos: torch.Tensor, z: torch.Tensor, box_l=N
         + _nonbonded_energy(pos_nm, ff, box_l=box_l)
     )
     energy_ev = energy_kjmol * KJMOL_TO_EV
-    forces = -torch.autograd.grad(energy_ev, pos_req, create_graph=False, retain_graph=False)[0]
-    return energy_ev.detach(), forces.detach()
+    forces_ref = -torch.autograd.grad(energy_ev, pos_req, create_graph=False, retain_graph=False)[0]
+    forces_input = torch.zeros_like(pos)
+    for input_idx, ref_idx in enumerate(input_to_ref):
+        forces_input[input_idx] = forces_ref[ref_idx]
+    return energy_ev.detach(), forces_input.detach()
 
 
 def lj_energy_forces(
