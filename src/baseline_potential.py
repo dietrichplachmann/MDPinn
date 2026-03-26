@@ -160,6 +160,8 @@ def _load_aspirin_forcefield() -> dict:
     bonds = [(int(e[0]) - 1, int(e[1]) - 1, int(e[2])) for e in top_sections.get("bonds", [])]
     pairs = {tuple(sorted((int(e[0]) - 1, int(e[1]) - 1))) for e in top_sections.get("pairs", [])}
     angles = [(int(e[0]) - 1, int(e[1]) - 1, int(e[2]) - 1, int(e[3])) for e in top_sections.get("angles", [])]
+    molecule_section = top_sections.get("moleculetype", [])
+    nrexcl = int(molecule_section[0][1]) if molecule_section else 3
 
     proper_dihedrals = []
     improper_dihedrals = []
@@ -217,6 +219,7 @@ def _load_aspirin_forcefield() -> dict:
         "atom_types": atomtypes,
         "charges": charges,
         "masses": masses,
+        "nrexcl": nrexcl,
         "bonds": bonds,
         "pairs": pairs,
         "angles": angles,
@@ -298,6 +301,38 @@ def _build_order_mapping(ff: dict, z: torch.Tensor, pos: torch.Tensor) -> list[i
 
     _ATOM_ORDER_CACHE[cache_key] = ref_to_input
     return ref_to_input
+
+
+def _neighbors_from_topology(ff: dict) -> list[list[int]]:
+    neighbors = [[] for _ in range(len(ff["atom_types"]))]
+    for i, j, _ in ff["bonds"]:
+        neighbors[i].append(j)
+        neighbors[j].append(i)
+    for nbrs in neighbors:
+        nbrs.sort()
+    return neighbors
+
+
+def _make_nrexcl_exclusions(ff: dict) -> set[tuple[int, int]]:
+    nrexcl = int(ff.get("nrexcl", 3))
+    neighbors = _neighbors_from_topology(ff)
+    excluded: set[tuple[int, int]] = set()
+    for start in range(len(neighbors)):
+        frontier = {start}
+        visited = {start}
+        for _ in range(nrexcl):
+            next_frontier = set()
+            for node in frontier:
+                for nbr in neighbors[node]:
+                    if nbr in visited:
+                        continue
+                    visited.add(nbr)
+                    next_frontier.add(nbr)
+                    excluded.add(tuple(sorted((start, nbr))))
+            frontier = next_frontier
+            if not frontier:
+                break
+    return excluded
 
 
 def _bond_energy(pos_nm: torch.Tensor, ff: dict) -> torch.Tensor:
@@ -398,7 +433,11 @@ def _nonbonded_energy(pos_nm: torch.Tensor, ff: dict, box_l=None) -> torch.Tenso
     energy = torch.zeros((), device=pos_nm.device, dtype=pos_nm.dtype)
     atom_types = ff["atom_types"]
     charges = torch.as_tensor(ff["charges"], device=pos_nm.device, dtype=pos_nm.dtype)
-    excluded = ff["pairs"]
+    excluded = ff.get("excluded_pairs")
+    if excluded is None:
+        excluded = _make_nrexcl_exclusions(ff)
+        ff["excluded_pairs"] = excluded
+    pair_interactions = ff["pairs"]
     box_nm = None
     if box_l is not None:
         box_nm = torch.as_tensor(box_l, device=pos_nm.device, dtype=pos_nm.dtype) * 0.1
@@ -407,7 +446,8 @@ def _nonbonded_energy(pos_nm: torch.Tensor, ff: dict, box_l=None) -> torch.Tenso
     for i in range(n_atoms):
         params_i = ff["nonbonded"][atom_types[i]]
         for j in range(i + 1, n_atoms):
-            if tuple(sorted((i, j))) in excluded:
+            key = tuple(sorted((i, j)))
+            if key in excluded and key not in pair_interactions:
                 continue
             params_j = ff["nonbonded"][atom_types[j]]
             delta = _minimum_image(pos_nm[i] - pos_nm[j], box_nm)
