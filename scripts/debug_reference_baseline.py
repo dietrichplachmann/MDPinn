@@ -15,7 +15,11 @@ if str(SRC_ROOT) not in sys.path:
 import torch
 from torchmdnet.datasets import MD17
 
-from baseline_potential import debug_aspirin_reference_components, reference_energy_forces
+from baseline_potential import (
+    debug_aspirin_reference_components,
+    load_reference_energy_offset_eV,
+    reference_energy_forces,
+)
 from data_splits import contiguous_split
 
 # PyTorch 2.6+ compatibility for TorchMD-Net processed dataset files.
@@ -43,13 +47,20 @@ def main():
     z = sample.z.detach().clone()
     energy_true = float(sample.y.view(-1)[0].item())
     force_true = sample.neg_dy.detach().clone()
+    energy_offset = load_reference_energy_offset_eV(args.molecule)
 
-    components = debug_aspirin_reference_components(pos, z, box_l=sample.box if "box" in sample else None)
+    components = debug_aspirin_reference_components(
+        pos,
+        z,
+        box_l=sample.box if "box" in sample else None,
+        energy_offset_eV=energy_offset,
+    )
     energy_ref, force_ref = reference_energy_forces(
         z=z,
         pos=pos,
         molecule=args.molecule,
         box_l=sample.box if "box" in sample else None,
+        energy_offset_eV=energy_offset,
     )
 
     force_residual = force_ref - force_true

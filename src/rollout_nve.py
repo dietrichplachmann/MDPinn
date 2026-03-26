@@ -20,7 +20,7 @@ import torch
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
-from baseline_potential import reference_energy_forces_batched
+from baseline_potential import load_reference_energy_offset_eV, reference_energy_forces_batched
 from data_splits import contiguous_split
 
 
@@ -77,6 +77,9 @@ def load_lnnp_from_ckpt(ckpt_path: str, device: str) -> LNNP:
     model._baseline_eps = float(hparams.get("baseline_epsilon_eV", 0.01))
     model._baseline_sigma = float(hparams.get("baseline_sigma_A", 1.0))
     model._baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))
+    model._baseline_energy_offset = float(
+        hparams.get("baseline_energy_offset_eV", load_reference_energy_offset_eV(model._baseline_molecule))
+    )
 
     return model.eval().to(device)
 
@@ -117,6 +120,7 @@ def model_energy_forces(model: LNNP, z: torch.Tensor, pos: torch.Tensor, device:
             epsilon_eV=getattr(model, "_baseline_eps", 0.01),
             sigma_A=getattr(model, "_baseline_sigma", 1.0),
             r_cut_A=getattr(model, "_baseline_cutoff", 5.0),
+            energy_offset_eV=getattr(model, "_baseline_energy_offset", 0.0),
         )
         y = y.squeeze(-1) + u_ref
         neg_dy = neg_dy + f_ref

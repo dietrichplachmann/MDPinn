@@ -2,7 +2,7 @@
   "study_name": "aspirin_physics_optuna",
   "results_root": "results/optuna",
   "mode": "physics",
-  "n_trials": 10,
+  "n_trials": 5,
   "timeout": null,
   "resume": true,
   "seed": 42,

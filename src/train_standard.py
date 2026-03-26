@@ -26,7 +26,7 @@ from torch_geometric.loader import DataLoader as GeometricDataLoader
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
-from baseline_potential import reference_energy_forces_batched
+from baseline_potential import load_reference_energy_offset_eV, reference_energy_forces_batched
 from data_splits import contiguous_split
 
 
@@ -52,6 +52,9 @@ class DeltaLNNP(LNNP):
         self.baseline_eps = float(hparams.get("baseline_epsilon_eV", 0.01))
         self.baseline_sigma = float(hparams.get("baseline_sigma_A", 1.0))
         self.baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))
+        self.baseline_energy_offset = float(
+            hparams.get("baseline_energy_offset_eV", load_reference_energy_offset_eV(self.baseline_molecule))
+        )
 
     def data_transform(self, batch):
         """Run base transform first, then residualize labels when enabled.
@@ -79,6 +82,7 @@ class DeltaLNNP(LNNP):
             epsilon_eV=self.baseline_eps,
             sigma_A=self.baseline_sigma,
             r_cut_A=self.baseline_cutoff,
+            energy_offset_eV=self.baseline_energy_offset,
         )
 
         # Energies are per-graph.
@@ -175,6 +179,7 @@ def train_standard_model(
         "baseline_epsilon_eV": float(baseline_epsilon_eV),
         "baseline_sigma_A": float(baseline_sigma_A),
         "baseline_cutoff_A": float(baseline_cutoff_A),
+        "baseline_energy_offset_eV": float(load_reference_energy_offset_eV(molecule)),
         "model": model_type,
         "prior_model": None,
         "output_model": "Scalar",

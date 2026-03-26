@@ -12,6 +12,7 @@ Fallback mode:
 from __future__ import annotations
 
 from functools import lru_cache
+import json
 from pathlib import Path
 
 import torch
@@ -24,6 +25,7 @@ CHARMM36_DIR = DATA_ROOT / "charmm36.ff"
 FF_BONDED = CHARMM36_DIR / "ffbonded.itp"
 FF_NONBONDED = CHARMM36_DIR / "ffnonbonded.itp"
 ASP_FF_BONDED = CHARMM36_DIR / "asp_ffbonded.itp"
+ASPIRIN_OFFSET = DATA_ROOT / "aspirin_reference_offset.json"
 KJMOL_TO_EV = 0.01036427230133138
 _ATOM_ORDER_CACHE: dict[tuple[int, ...], list[int]] = {}
 
@@ -131,6 +133,17 @@ def _match_dihedral(entry_types: tuple[str, ...], query: tuple[str, ...]) -> boo
 
 def _dihedral_score(entry_types: tuple[str, ...], query: tuple[str, ...]) -> int:
     return sum(1 for e, q in zip(entry_types, query) if e == q)
+
+
+@lru_cache(maxsize=None)
+def load_reference_energy_offset_eV(molecule: str | None = None) -> float:
+    if (molecule or "").lower() != "aspirin":
+        return 0.0
+    if not ASPIRIN_OFFSET.exists():
+        return 0.0
+    with open(ASPIRIN_OFFSET, "r") as handle:
+        payload = json.load(handle)
+    return float(payload.get("energy_offset_eV", 0.0))
 
 
 @lru_cache(maxsize=1)
@@ -470,7 +483,12 @@ def _aspirin_component_energies(pos_nm: torch.Tensor, ff: dict, box_l=None) -> d
     }
 
 
-def _aspirin_reference_energy_forces(pos: torch.Tensor, z: torch.Tensor, box_l=None) -> tuple[torch.Tensor, torch.Tensor]:
+def _aspirin_reference_energy_forces(
+    pos: torch.Tensor,
+    z: torch.Tensor,
+    box_l=None,
+    energy_offset_eV: float = 0.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
     ff = _load_aspirin_forcefield()
     ref_to_input = _build_order_mapping(ff, z, pos)
     input_to_ref = [0] * len(ref_to_input)
@@ -482,7 +500,11 @@ def _aspirin_reference_energy_forces(pos: torch.Tensor, z: torch.Tensor, box_l=N
     pos_nm = pos_req * 0.1
     components = _aspirin_component_energies(pos_nm, ff, box_l=box_l)
     energy_kjmol = sum(components.values())
-    energy_ev = energy_kjmol * KJMOL_TO_EV
+    energy_ev = energy_kjmol * KJMOL_TO_EV - torch.as_tensor(
+        float(energy_offset_eV),
+        device=pos_req.device,
+        dtype=pos_req.dtype,
+    )
     forces_ref = -torch.autograd.grad(energy_ev, pos_req, create_graph=False, retain_graph=False)[0]
     forces_input = torch.zeros_like(pos)
     for input_idx, ref_idx in enumerate(input_to_ref):
@@ -490,7 +512,12 @@ def _aspirin_reference_energy_forces(pos: torch.Tensor, z: torch.Tensor, box_l=N
     return energy_ev.detach(), forces_input.detach()
 
 
-def debug_aspirin_reference_components(pos: torch.Tensor, z: torch.Tensor, box_l=None) -> dict[str, torch.Tensor]:
+def debug_aspirin_reference_components(
+    pos: torch.Tensor,
+    z: torch.Tensor,
+    box_l=None,
+    energy_offset_eV: float | None = None,
+) -> dict[str, torch.Tensor]:
     """Return per-term aspirin baseline energies on one graph in input atom order."""
     ff = _load_aspirin_forcefield()
     _ = _build_order_mapping(ff, z, pos)
@@ -498,7 +525,16 @@ def debug_aspirin_reference_components(pos: torch.Tensor, z: torch.Tensor, box_l
     pos_nm = pos_ordered.detach().clone() * 0.1
     components = _aspirin_component_energies(pos_nm, ff, box_l=box_l)
     components_ev = {key.replace("_kjmol", "_ev"): value * KJMOL_TO_EV for key, value in components.items()}
-    components_ev["total_ev"] = sum(components_ev.values())
+    raw_total_ev = sum(components_ev.values())
+    if energy_offset_eV is None:
+        energy_offset_eV = load_reference_energy_offset_eV("aspirin")
+    components_ev["raw_total_ev"] = raw_total_ev
+    components_ev["energy_offset_ev"] = torch.as_tensor(
+        float(energy_offset_eV),
+        device=raw_total_ev.device,
+        dtype=raw_total_ev.dtype,
+    )
+    components_ev["total_ev"] = raw_total_ev - components_ev["energy_offset_ev"]
     return {key: value.detach() for key, value in components_ev.items()}
 
 
@@ -551,9 +587,12 @@ def reference_energy_forces(
     epsilon_eV: float = 0.01,
     sigma_A: float = 1.0,
     r_cut_A: float = 5.0,
+    energy_offset_eV: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if (molecule or "").lower() == "aspirin" and ASPIRIN_TOP.exists():
-        return _aspirin_reference_energy_forces(pos, z, box_l=box_l)
+        if energy_offset_eV is None:
+            energy_offset_eV = load_reference_energy_offset_eV(molecule)
+        return _aspirin_reference_energy_forces(pos, z, box_l=box_l, energy_offset_eV=energy_offset_eV)
     return lj_energy_forces(pos, epsilon_eV=epsilon_eV, sigma_A=sigma_A, r_cut_A=r_cut_A)
 
 
@@ -566,6 +605,7 @@ def reference_energy_forces_batched(
     epsilon_eV: float = 0.01,
     sigma_A: float = 1.0,
     r_cut_A: float = 5.0,
+    energy_offset_eV: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     device = pos.device
     dtype = pos.dtype
@@ -589,6 +629,7 @@ def reference_energy_forces_batched(
             epsilon_eV=epsilon_eV,
             sigma_A=sigma_A,
             r_cut_A=r_cut_A,
+            energy_offset_eV=energy_offset_eV,
         )
         u_per_graph[graph_idx] = u_graph
         f_all_atoms[mask] = f_graph

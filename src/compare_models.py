@@ -25,7 +25,7 @@ from tqdm import tqdm
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
-from baseline_potential import reference_energy_forces_batched
+from baseline_potential import load_reference_energy_offset_eV, reference_energy_forces_batched
 from data_splits import contiguous_split
 
 
@@ -64,6 +64,9 @@ def load_checkpoint(checkpoint_path, device="cpu"):
     model._baseline_eps = float(hparams.get("baseline_epsilon_eV", 0.01))
     model._baseline_sigma = float(hparams.get("baseline_sigma_A", 1.0))
     model._baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))
+    model._baseline_energy_offset = float(
+        hparams.get("baseline_energy_offset_eV", load_reference_energy_offset_eV(model._baseline_molecule))
+    )
 
     return model.eval().to(device)
 
@@ -107,6 +110,7 @@ def predict_absolute_energy_forces(model, batch):
         epsilon_eV=getattr(model, "_baseline_eps", 0.01),
         sigma_A=getattr(model, "_baseline_sigma", 1.0),
         r_cut_A=getattr(model, "_baseline_cutoff", 5.0),
+        energy_offset_eV=getattr(model, "_baseline_energy_offset", 0.0),
     )
 
     energy_abs = energy_pred.squeeze(-1) + u_ref

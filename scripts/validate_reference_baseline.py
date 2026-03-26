@@ -18,7 +18,7 @@ from torch_geometric.loader import DataLoader as GeometricDataLoader
 
 from torchmdnet.datasets import MD17
 
-from baseline_potential import reference_energy_forces_batched
+from baseline_potential import load_reference_energy_offset_eV, reference_energy_forces_batched
 from data_splits import contiguous_split
 
 # PyTorch 2.6+ compatibility for TorchMD-Net processed dataset files.
@@ -54,6 +54,7 @@ def main():
     loader = GeometricDataLoader(subset, batch_size=args.batch_size, shuffle=False, num_workers=0)
     energy_errors = []
     force_errors = []
+    energy_offset = load_reference_energy_offset_eV(args.molecule)
 
     for batch_idx, batch in enumerate(loader):
         if batch_idx >= args.max_batches:
@@ -65,10 +66,12 @@ def main():
             batch=batch.batch,
             molecule=args.molecule,
             box_l=batch.box if "box" in batch else None,
+            energy_offset_eV=energy_offset,
         )
         energy_errors.extend((u_ref.detach().cpu() - batch.y.view(-1).detach().cpu()).tolist())
         force_errors.extend((f_ref.detach().cpu() - batch.neg_dy.detach().cpu()).reshape(-1).tolist())
 
+    print(f"Applied baseline energy offset (eV): {energy_offset}")
     print("Energy baseline residual stats:", summarize_errors(energy_errors))
     print("Force baseline residual stats:", summarize_errors(force_errors))
 
