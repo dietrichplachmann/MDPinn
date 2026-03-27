@@ -15,7 +15,9 @@
     "max_epochs": 10,
     "num_workers": 0,
     "enable_progress_bar": false,
-    "deterministic": false
+    "deterministic": false,
+    "val_check_interval": 0.5,
+    "num_sanity_val_steps": 0
   },
   "sampler": {
     "name": "TPESampler",
@@ -24,10 +26,11 @@
     }
   },
   "pruner": {
-    "name": "MedianPruner",
+    "name": "SuccessiveHalvingPruner",
     "kwargs": {
-      "n_startup_trials": 3,
-      "n_warmup_steps": 2
+      "min_resource": 1,
+      "reduction_factor": 3,
+      "min_early_stopping_rate": 0
     }
   },
   "fixed_params": {

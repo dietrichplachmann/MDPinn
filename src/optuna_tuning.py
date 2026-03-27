@@ -106,8 +106,10 @@ class OptunaPruningCallback(pl.Callback):
         else:
             value = float(value)
 
-        current_epoch = int(trainer.current_epoch)
-        self.trial.report(value, step=current_epoch)
+        # Use global_step so pruning can react to intra-epoch validation checks
+        # (e.g., when val_check_interval < 1.0).
+        step = int(getattr(trainer, "global_step", trainer.current_epoch))
+        self.trial.report(value, step=step)
         if self.trial.should_prune():
             raise self._pruned_exception()
 
@@ -373,20 +375,40 @@ class StudyRunner:
         sampled = self._sample_params(trial)
         fixed = deepcopy(self.config.get("fixed_params", {}))
         training_kwargs = _deep_update(fixed, sampled)
+        trainer_cfg = self.config.get("trainer", {})
         training_kwargs.setdefault("dataset", "MD17")
         training_kwargs.setdefault("molecule", "aspirin")
         training_kwargs.setdefault("model_type", "tensornet")
-        training_kwargs.setdefault("num_epochs", int(self.config.get("trainer", {}).get("max_epochs", 10)))
+        training_kwargs.setdefault("num_epochs", int(trainer_cfg.get("max_epochs", 10)))
         training_kwargs.setdefault("checkpoint_name", f"trial_{trial.number:04d}")
         training_kwargs.setdefault("seed", int(self.config.get("seed", 42)) + trial.number)
-        training_kwargs.setdefault("num_workers", int(self.config.get("trainer", {}).get("num_workers", 0)))
+        training_kwargs.setdefault("num_workers", int(trainer_cfg.get("num_workers", 0)))
         training_kwargs["save_dir"] = str(trial_dir / "checkpoints")
         training_kwargs["log_dir"] = str(trial_dir / "logs")
         training_kwargs["trainer_callbacks"] = [OptunaPruningCallback(trial, self.config["objective"]["metric"])]
-        training_kwargs["trainer_kwargs"] = {
-            "enable_progress_bar": bool(self.config.get("trainer", {}).get("enable_progress_bar", False)),
-            "deterministic": bool(self.config.get("trainer", {}).get("deterministic", False)),
+
+        # Allow targeted Trainer overrides from Optuna config to improve
+        # pruning responsiveness for expensive epochs.
+        trainer_kwargs = {
+            "enable_progress_bar": bool(trainer_cfg.get("enable_progress_bar", False)),
+            "deterministic": bool(trainer_cfg.get("deterministic", False)),
         }
+        for key in (
+            "val_check_interval",
+            "check_val_every_n_epoch",
+            "num_sanity_val_steps",
+            "limit_train_batches",
+            "limit_val_batches",
+            "max_steps",
+            "accumulate_grad_batches",
+            "gradient_clip_val",
+            "gradient_clip_algorithm",
+            "precision",
+        ):
+            if key in trainer_cfg:
+                trainer_kwargs[key] = trainer_cfg[key]
+        trainer_kwargs.update(trainer_cfg.get("trainer_kwargs", {}))
+        training_kwargs["trainer_kwargs"] = trainer_kwargs
         return training_kwargs, sampled
 
     def _run_training(self, kwargs: dict):
@@ -464,6 +486,10 @@ def _create_pruner(config: dict):
     kwargs = pruner_cfg.get("kwargs", {})
     if name == "MedianPruner":
         return optuna.pruners.MedianPruner(**kwargs)
+    if name == "SuccessiveHalvingPruner":
+        return optuna.pruners.SuccessiveHalvingPruner(**kwargs)
+    if name == "HyperbandPruner":
+        return optuna.pruners.HyperbandPruner(**kwargs)
     if name == "NopPruner":
         return optuna.pruners.NopPruner()
     raise ValueError(f"Unsupported pruner '{name}'.")
