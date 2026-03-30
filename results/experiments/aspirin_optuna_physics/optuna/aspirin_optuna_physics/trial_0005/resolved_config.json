@@ -38,6 +38,8 @@
   ],
   "trainer_kwargs": {
     "enable_progress_bar": true,
-    "deterministic": false
+    "deterministic": false,
+    "val_check_interval": 0.5,
+    "num_sanity_val_steps": 0
   }
 }

@@ -1,5 +1,7 @@
 {
-  "status": "completed",
-  "objective_score": 660.0873413085938,
-  "objective_metric_value": 660.0873413085938
+  "status": "pruned",
+  "exception": {
+    "type": "TrialPruned",
+    "message": ""
+  }
 }
