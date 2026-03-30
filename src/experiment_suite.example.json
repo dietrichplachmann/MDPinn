@@ -3,6 +3,7 @@
   "_documentation": {
     "overwrite_existing": "Set to true on an experiment to delete and recreate that experiment's output folder before running.",
     "runner": "Omit runner or set runner=grid for the existing fixed-grid workflow. Set runner=optuna to let experiment_suite launch an Optuna study for that experiment.",
+    "optuna_stages": "Optional two-stage Optuna flow. Stage entries run in order; stage 1 can promote best params into stage 2 fixed_params.",
     "physics_defaults": [
       "momentum regularization is disabled by default for MD17 single-molecule sweeps because the model already encodes most symmetry structure.",
       "nve_loss_mode=total_energy regularizes K+U drift instead of potential-only drift.",
@@ -218,7 +219,64 @@
             }
           }
         }
-      }
+      },
+      "optuna_stages": [
+        {
+          "name": "screen",
+          "n_trials": 24,
+          "trainer": {
+            "max_epochs": 4,
+            "val_check_interval": 0.25,
+            "limit_train_batches": 0.25,
+            "limit_val_batches": 0.5
+          },
+          "pruner": {
+            "name": "SuccessiveHalvingPruner",
+            "kwargs": {
+              "min_resource": 1,
+              "reduction_factor": 2,
+              "min_early_stopping_rate": 0
+            }
+          },
+          "promote_best_params_to_next": true
+        },
+        {
+          "name": "full",
+          "n_trials": 8,
+          "trainer": {
+            "max_epochs": 20,
+            "val_check_interval": 0.5,
+            "limit_train_batches": 1.0,
+            "limit_val_batches": 1.0
+          },
+          "pruner": {
+            "name": "SuccessiveHalvingPruner",
+            "kwargs": {
+              "min_resource": 1,
+              "reduction_factor": 3,
+              "min_early_stopping_rate": 0
+            }
+          },
+          "search_space": {
+            "common": {
+              "embedding_dimension": {
+                "type": "categorical",
+                "choices": [64, 128]
+              },
+              "num_layers": {
+                "type": "categorical",
+                "choices": [2, 4]
+              }
+            },
+            "nve": {
+              "nve_freq": {
+                "type": "categorical",
+                "choices": [10, 25]
+              }
+            }
+          }
+        }
+      ]
     }
   ]
 }

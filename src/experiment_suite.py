@@ -33,6 +33,16 @@ def _merge(base, override):
     return out
 
 
+def _deep_merge_dict(base, override):
+    out = deepcopy(base)
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge_dict(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
 def _sanitize_token(value):
     return re.sub(r"[^a-zA-Z0-9_-]+", "_", str(value))
 
@@ -51,8 +61,15 @@ def _make_physics_grid(e):
     ]
 
 
-def _build_optuna_experiment_config(experiment_name, experiment_cfg, exp_dir):
-    tuning = deepcopy(experiment_cfg.get("optuna", {}))
+def _build_optuna_experiment_config(
+    experiment_name,
+    experiment_cfg,
+    exp_dir,
+    tuning_override=None,
+    stage_name=None,
+    promoted_params=None,
+):
+    tuning = deepcopy(tuning_override if tuning_override is not None else experiment_cfg.get("optuna", {}))
     if not tuning:
         raise ValueError(f"Experiment '{experiment_name}' is marked for Optuna but has no 'optuna' config.")
 
@@ -64,16 +81,91 @@ def _build_optuna_experiment_config(experiment_name, experiment_cfg, exp_dir):
     fixed.setdefault("baseline_epsilon_eV", float(experiment_cfg.get("baseline_eps", 0.01)))
     fixed.setdefault("baseline_sigma_A", float(experiment_cfg.get("baseline_sigma", 1.0)))
     fixed.setdefault("baseline_cutoff_A", float(experiment_cfg.get("baseline_cutoff", 5.0)))
+    if promoted_params:
+        # Promote strong prior settings from a previous stage.
+        fixed.update(promoted_params)
 
     trainer_cfg = deepcopy(tuning.get("trainer", {}))
     trainer_cfg.setdefault("max_epochs", int(experiment_cfg.get("epochs", 10)))
     trainer_cfg.setdefault("num_workers", int(tuning.get("num_workers", 0)))
 
-    tuning["study_name"] = tuning.get("study_name", experiment_name)
+    default_study_name = experiment_name
+    if stage_name:
+        default_study_name = f"{experiment_name}_{_sanitize_token(stage_name)}"
+    tuning["study_name"] = tuning.get("study_name", default_study_name)
     tuning["results_root"] = str(exp_dir / "optuna")
     tuning["fixed_params"] = fixed
     tuning["trainer"] = trainer_cfg
     return tuning
+
+
+def _run_optuna_stages(name, experiment_cfg, exp_dir, run_study_config):
+    stages = experiment_cfg.get("optuna_stages", [])
+    if not stages:
+        tuning_cfg = _build_optuna_experiment_config(name, experiment_cfg, exp_dir)
+        study = run_study_config(tuning_cfg)
+        return study, []
+
+    base_optuna = deepcopy(experiment_cfg.get("optuna", {}))
+    promoted_params = None
+    stage_summaries = []
+    last_study = None
+
+    for stage_index, stage_cfg in enumerate(stages):
+        stage_name = stage_cfg.get("name", f"stage_{stage_index + 1}")
+        merged_optuna = _deep_merge_dict(base_optuna, stage_cfg.get("optuna", {}))
+        if "n_trials" in stage_cfg:
+            merged_optuna["n_trials"] = int(stage_cfg["n_trials"])
+        if "objective" in stage_cfg:
+            merged_optuna["objective"] = _deep_merge_dict(merged_optuna.get("objective", {}), stage_cfg["objective"])
+        if "trainer" in stage_cfg:
+            merged_optuna["trainer"] = _deep_merge_dict(merged_optuna.get("trainer", {}), stage_cfg["trainer"])
+        if "sampler" in stage_cfg:
+            merged_optuna["sampler"] = _deep_merge_dict(merged_optuna.get("sampler", {}), stage_cfg["sampler"])
+        if "pruner" in stage_cfg:
+            merged_optuna["pruner"] = _deep_merge_dict(merged_optuna.get("pruner", {}), stage_cfg["pruner"])
+        if "fixed_params" in stage_cfg:
+            merged_optuna["fixed_params"] = _deep_merge_dict(merged_optuna.get("fixed_params", {}), stage_cfg["fixed_params"])
+        if "search_space" in stage_cfg:
+            merged_optuna["search_space"] = _deep_merge_dict(merged_optuna.get("search_space", {}), stage_cfg["search_space"])
+
+        stage_study_name = stage_cfg.get("study_name", f"{name}_{_sanitize_token(stage_name)}")
+        merged_optuna["study_name"] = stage_study_name
+
+        tuning_cfg = _build_optuna_experiment_config(
+            name,
+            experiment_cfg,
+            exp_dir,
+            tuning_override=merged_optuna,
+            stage_name=stage_name,
+            promoted_params=promoted_params,
+        )
+        study = run_study_config(tuning_cfg)
+        last_study = study
+
+        completed = [trial for trial in study.trials if trial.state.name == "COMPLETE"]
+        best_params = study.best_trial.params if completed else {}
+        stage_summaries.append(
+            {
+                "index": stage_index + 1,
+                "name": stage_name,
+                "study_name": study.study_name,
+                "n_trials": len(study.trials),
+                "completed_trials": len(completed),
+                "best_trial": study.best_trial.number if completed else None,
+                "best_value": study.best_trial.value if completed else None,
+                "promoted_params": bool(stage_cfg.get("promote_best_params_to_next", False)),
+                "best_params": best_params,
+            }
+        )
+
+        if stage_cfg.get("promote_best_params_to_next", False) and completed:
+            promoted_params = dict(best_params)
+
+    if stage_summaries:
+        with open(exp_dir / "optuna_stage_summary.json", "w") as handle:
+            json.dump({"stages": stage_summaries}, handle, indent=2)
+    return last_study, stage_summaries
 
 
 def _summarize_optuna_experiment(experiment_name, experiment_cfg, exp_dir, study):
@@ -454,9 +546,10 @@ def main():
         if e.get("runner") == "optuna" or e.get("use_optuna", False):
             from optuna_tuning import run_study_config
 
-            tuning_cfg = _build_optuna_experiment_config(name, e, exp_dir)
-            study = run_study_config(tuning_cfg)
+            study, stage_summaries = _run_optuna_stages(name, e, exp_dir, run_study_config)
             summary = _summarize_optuna_experiment(name, e, exp_dir, study)
+            if stage_summaries:
+                summary["optuna_stages"] = stage_summaries
             summary.update(_finalize_optuna_experiment(name, e, exp_dir, study))
             with open(exp_dir / "experiment_summary_optuna.json", "w") as handle:
                 json.dump(summary, handle, indent=2)
