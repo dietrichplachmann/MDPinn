@@ -18,6 +18,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import torch
+import numpy as np
 from torchmdnet.datasets import MD17
 
 from compare_models import compare_models
@@ -353,6 +354,12 @@ def _finalize_optuna_experiment(experiment_name, experiment_cfg, exp_dir, study)
             )
             with open(exp_dir / "optuna" / study.study_name / "rollout_summary_best.json", "w") as handle:
                 json.dump({"standard": std_rollout, "physics": best_rollout}, handle, indent=2)
+            plot_rollout_drift_comparison(
+                std_rollout,
+                best_rollout,
+                exp_dir / "optuna" / study.study_name / "rollout_drift_comparison_best.png",
+                title=f"{experiment_name}: Standard vs Physics Rollout Drift",
+            )
         else:
             with open(exp_dir / "optuna" / study.study_name / "rollout_summary_best.json", "w") as handle:
                 json.dump({"best_trial": best_rollout}, handle, indent=2)
@@ -398,6 +405,7 @@ def run_rollout_summary(
     failed = 0
     max_abs_drifts = []
     final_drifts = []
+    rollout_rows = []
     for start_idx in starts:
         s0 = full[start_idx]
         s1 = full[start_idx + 1]
@@ -426,6 +434,19 @@ def run_rollout_summary(
         else:
             max_abs_drifts.append(float(out["max_abs_drift"]))
             final_drifts.append(float(out["final_drift"]))
+        rollout_rows.append(
+            {
+                "start_idx": int(start_idx),
+                "failed": bool(out["failed"]),
+                "final_step": int(out["final_step"]),
+                "final_drift": None if out["final_drift"] is None else float(out["final_drift"]),
+                "max_abs_drift": None if out["max_abs_drift"] is None else float(out["max_abs_drift"]),
+                "series": {
+                    "step": [int(s) for s in out["series"].get("step", [])],
+                    "drift": [float(d) for d in out["series"].get("drift", [])],
+                },
+            }
+        )
 
     return {
         "failed": int(failed),
@@ -433,7 +454,89 @@ def run_rollout_summary(
         "failure_rate": float(failed / n_rollouts),
         "mean_max_abs_drift_eV": float(sum(max_abs_drifts) / len(max_abs_drifts)) if max_abs_drifts else None,
         "mean_final_drift_eV": float(sum(final_drifts) / len(final_drifts)) if final_drifts else None,
+        "rollouts": rollout_rows,
     }
+
+
+def _collect_drift_lines(rollout_summary):
+    lines = []
+    for row in (rollout_summary or {}).get("rollouts", []):
+        if row.get("failed"):
+            continue
+        series = row.get("series", {})
+        steps = series.get("step", [])
+        drifts = series.get("drift", [])
+        if not steps or not drifts or len(steps) != len(drifts):
+            continue
+        lines.append((np.asarray(steps, dtype=float), np.asarray(drifts, dtype=float)))
+    return lines
+
+
+def _mean_drift_by_step(lines):
+    if not lines:
+        return np.asarray([]), np.asarray([])
+    buckets = {}
+    for steps, drifts in lines:
+        for s, d in zip(steps, drifts):
+            buckets.setdefault(float(s), []).append(float(d))
+    xs = np.asarray(sorted(buckets.keys()), dtype=float)
+    ys = np.asarray([float(np.mean(buckets[x])) for x in xs], dtype=float)
+    return xs, ys
+
+
+def plot_rollout_drift_comparison(standard_rollout, physics_rollout, out_path, title="Rollout Drift Comparison"):
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        print(f"Warning: could not import matplotlib for drift plot: {exc}")
+        return
+
+    std_lines = _collect_drift_lines(standard_rollout)
+    phys_lines = _collect_drift_lines(physics_rollout)
+    if not std_lines and not phys_lines:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    ax0, ax1 = axes
+
+    for steps, drifts in std_lines:
+        ax0.plot(steps, drifts, color="#1f77b4", alpha=0.25, linewidth=1.0)
+    for steps, drifts in phys_lines:
+        ax0.plot(steps, drifts, color="#ff7f0e", alpha=0.25, linewidth=1.0)
+
+    std_x, std_y = _mean_drift_by_step(std_lines)
+    phys_x, phys_y = _mean_drift_by_step(phys_lines)
+    if std_x.size:
+        ax0.plot(std_x, std_y, color="#1f77b4", linewidth=2.2, label="Standard mean")
+    if phys_x.size:
+        ax0.plot(phys_x, phys_y, color="#ff7f0e", linewidth=2.2, label="Physics mean")
+    ax0.axhline(0.0, color="black", linewidth=1.0, linestyle="--")
+    ax0.set_xlabel("Step")
+    ax0.set_ylabel("Energy drift (eV)")
+    ax0.set_title("Drift Trajectories")
+    ax0.legend(loc="best")
+
+    std_max = [float(r["max_abs_drift"]) for r in (standard_rollout or {}).get("rollouts", []) if not r.get("failed") and r.get("max_abs_drift") is not None]
+    phys_max = [float(r["max_abs_drift"]) for r in (physics_rollout or {}).get("rollouts", []) if not r.get("failed") and r.get("max_abs_drift") is not None]
+    std_final = [abs(float(r["final_drift"])) for r in (standard_rollout or {}).get("rollouts", []) if not r.get("failed") and r.get("final_drift") is not None]
+    phys_final = [abs(float(r["final_drift"])) for r in (physics_rollout or {}).get("rollouts", []) if not r.get("failed") and r.get("final_drift") is not None]
+
+    dist_data = [std_max, phys_max, std_final, phys_final]
+    labels = ["Std max|dE|", "Phys max|dE|", "Std |dE(T)|", "Phys |dE(T)|"]
+    non_empty = [(d, l) for d, l in zip(dist_data, labels) if d]
+    if non_empty:
+        ax1.boxplot([d for d, _ in non_empty], labels=[l for _, l in non_empty], showfliers=True)
+    ax1.set_ylabel("Drift (eV)")
+    ax1.set_title("Drift Distribution")
+    ax1.tick_params(axis="x", labelrotation=20)
+
+    fig.suptitle(title)
+    fig.tight_layout()
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote: {out_path}")
 
 
 def write_tables(rows, out_dir):
@@ -694,6 +797,12 @@ def main():
                 )
                 with open(exp_dir / f"rollout_summary_{variant_tag}.json", "w") as f:
                     json.dump({"standard": standard_rollout, "physics": phys_roll}, f, indent=2)
+                plot_rollout_drift_comparison(
+                    standard_rollout,
+                    phys_roll,
+                    exp_dir / f"rollout_drift_comparison_{variant_tag}.png",
+                    title=f"{name} ({variant_tag}): Standard vs Physics Rollout Drift",
+                )
 
             with open(exp_dir / f"experiment_summary_{variant_tag}.json", "w") as f:
                 json.dump(summary, f, indent=2)
