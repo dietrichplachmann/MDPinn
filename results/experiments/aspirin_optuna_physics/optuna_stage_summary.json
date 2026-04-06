@@ -1,27 +1,5 @@
 {
-  "experiment": "aspirin_optuna_physics",
-  "variant": "optuna",
-  "runner": "optuna",
-  "dataset": "MD17",
-  "molecule": "aspirin",
-  "system_type": "single",
-  "model": "tensornet",
-  "epochs": 10,
-  "batch_size": 32,
-  "lr": 0.000291063591313307,
-  "delta_learning": true,
-  "embedding_dimension": 64,
-  "num_layers": 4,
-  "num_rbf": 64,
-  "standard_checkpoint": "/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/reference_standard/best_optuna_reference_standard.ckpt",
-  "physics_checkpoint": "/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_full/trial_0000/checkpoints/trial_0000.ckpt",
-  "optuna_study_dir": "results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_full",
-  "optuna_best_trial": 0,
-  "optuna_best_value": 114.12541198730469,
-  "best_model_path": "/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_full/trial_0000/checkpoints/trial_0000.ckpt",
-  "val_total_mse_loss": 114.12541198730469,
-  "test_total_mse_loss": null,
-  "optuna_stages": [
+  "stages": [
     {
       "index": 1,
       "name": "screen",
@@ -88,15 +66,5 @@
         "nve_dt_fs": 0.5
       }
     }
-  ],
-  "energy_mae_std": 406749.21875,
-  "energy_mae_phys": 406751.34375,
-  "force_mae_std": 1.6395725011825562,
-  "force_mae_phys": 1.4038372039794922,
-  "drift_cmp_std": 8.398937499999999,
-  "drift_cmp_phys": 5.4285,
-  "rollout_fail_phys": 0.0,
-  "rollout_drift_phys": 17.5875,
-  "rollout_fail_std": 0.0,
-  "rollout_drift_std": 18.29375
+  ]
 }
