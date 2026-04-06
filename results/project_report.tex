@@ -1,0 +1,155 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{setspace}
+\usepackage{hyperref}
+\usepackage{parskip}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue,
+  citecolor=black,
+  pdftitle={MDPinn Project Report},
+  pdfauthor={OpenAI Codex}
+}
+
+\setstretch{1.1}
+
+\begin{document}
+
+\title{MDPinn Project Report}
+\date{April 6, 2026}
+\maketitle
+
+\section{Project Summary}
+
+This project is an attempt to build a publishable machine-learned molecular potential for aspirin that is useful not only for static test-set regression, but also for short molecular dynamics rollouts. The current codebase uses the MD17 aspirin trajectory as the primary dataset, trains neural interatomic potentials with TorchMD-Net, and compares a standard supervised model against a physics-informed variant that adds physically motivated regularization terms during training. The central scientific idea is that a model intended for molecular simulation should be judged by more than pointwise prediction error alone. It should also produce forces that remain dynamically stable under integration, preserve conservative structure as well as possible, and benefit from inductive biases that reflect known molecular physics. This framing is consistent with the broader machine-learned force-field literature, which treats accurate force prediction, symmetry preservation, and dynamical fidelity as core requirements rather than optional extras \cite{unke2021,chmiela2017,batzner2022}.
+
+The present implementation is not a generic PINN for continuum mechanics or partial differential equations. It is more accurately described as a physics-regularized neural interatomic potential. The supervised backbone learns energies and forces from ab initio molecular data, while additional losses are used to penalize force imbalance and short-horizon NVE drift. That choice makes sense because the target object is a potential energy surface for molecular dynamics, and the end use is trajectory generation. In that setting, a low regression error that still leads to unstable or strongly drifting rollouts is scientifically insufficient. Prior work on machine learning force fields has repeatedly emphasized that the real standard is not only interpolation accuracy on held-out structures but the ability to support physically faithful simulation \cite{unke2021,chmiela2018}. The code in this repository therefore treats rollout behavior as a first-class evaluation target rather than an afterthought.
+
+\section{What The Codebase Currently Does}
+
+The training pipeline centers on TorchMD-Net with the TensorNet architecture. TensorNet is an O(3)-equivariant message-passing model that represents molecular information with Cartesian tensors, which is a sensible architectural choice for atomistic learning because energies are invariant to rigid motions while forces transform equivariantly under rotation and reflection \cite{tholke2022,simeon2023}. The use of an equivariant architecture is not cosmetic. It directly encodes geometric structure into the hypothesis class, which improves data efficiency and reduces the burden on the optimizer to rediscover basic symmetry properties from finite data. This rationale is well supported in the literature on equivariant interatomic potentials, including NequIP and TorchMD-Net, where equivariance is tied to both better sample efficiency and stronger force prediction performance \cite{batzner2022,tholke2022}.
+
+The project trains on aspirin from MD17 using energies and forces, with contiguous train, validation, and test splits. That split policy is important because MD trajectories are temporally correlated. If neighboring frames are scattered across train and test, benchmark numbers can become overoptimistic because test points may lie extremely close to training frames in configuration space. Christensen and von Lilienfeld explicitly discuss the role of gradients, noise, and correlation structure in molecular benchmark design, and their critique of MD17 is one reason this repository's use of contiguous blocks is methodologically defensible \cite{christensen2020}. Even though the current implementation still uses MD17 rather than rMD17, the decision to respect trajectory ordering is aligned with the concerns raised in that paper and is a better choice than an indiscriminate random split.
+
+The standard model learns from supervised energy and force targets. That is scientifically reasonable because forces are derivatives of the potential and are the quantities actually integrated during molecular dynamics. Including force labels typically gives much richer geometric information per configuration than energy-only learning. This motivation is established both in the original MD17 force-field work of Chmiela et al.\ and in later analyses of gradient information in molecular learning \cite{chmiela2017,christensen2020}. In the codebase, the standard model remains energy-based, so forces are still obtained as derivatives of a scalar energy prediction. That preserves the conservative structure of the learned force field in the neural part of the model, which is a necessary property for meaningful energy accounting in dynamics \cite{chmiela2017,batzner2022}.
+
+The repository also implements delta-learning with an analytic baseline potential. In practice this means that the model does not necessarily learn the full energy surface from scratch. Instead, it can learn a correction to a baseline computed from an aspirin force-field representation derived from GROMACS and CHARMM-style topology files. The conceptual reason for this is straightforward. If a physically motivated baseline already captures some broad bonded and nonbonded structure, the neural model can spend its capacity learning the residual error rather than reconstructing the whole landscape from zero. This is the same basic logic that motivates the delta-machine-learning strategy introduced by Ramakrishnan et al., where a learned correction improves a cheaper or more approximate physical model \cite{ramakrishnan2015}. In this project, that idea is adapted from quantum chemistry model correction into a hybrid molecular-potential setting.
+
+The physics-informed model adds two main regularization components during training. The first is a momentum-symmetry penalty that discourages net spurious force imbalance. The second is an NVE-style drift penalty computed on short trajectory windows, with options for potential-only or total-energy style losses. Both terms are intended to push the model toward forces that behave more plausibly when used in time integration. This is scientifically motivated because molecular dynamics is ultimately a dynamical problem, and learned potentials are valuable only to the extent that they produce stable and physically interpretable trajectories. The general logic is consistent with the machine-learning-force-field literature, which increasingly evaluates models through simulation quality and not only through pointwise errors \cite{unke2021,batzner2022,chmiela2018}. The use of a short-horizon energy-drift penalty is also a reasonable engineering compromise: full rollout training is expensive, but local dynamical regularization can still expose the optimizer to the consequences of bad force geometry.
+
+The evaluation pipeline compares standard and physics-informed checkpoints on absolute energies and forces, reconstructing total observables when delta-learning is enabled. It also computes drift proxies on trajectory segments and runs explicit NVE rollouts with a velocity Verlet integrator. Velocity Verlet is the conventional choice for this kind of evaluation because it is a standard integrator in atomistic simulation and provides a familiar baseline for judging whether drift is a model problem or merely an artifact of an exotic numerical scheme \cite{verlet1967}. In other words, the evaluation setup is asking the right question: if the model is dropped into a normal MD workflow, does it behave like a usable potential?
+
+\section{Why These Design Choices Make Scientific Sense}
+
+Using an equivariant neural architecture is justified because molecular observables obey exact geometric transformation laws. A scalar potential should not change under rigid rotation or translation, while forces should rotate with the system. Models that encode these constraints directly generally use data more efficiently and extrapolate more coherently than models that must infer symmetry from examples alone. This point has become standard in the literature on modern atomistic machine learning, including SchNet, TorchMD-Net, NequIP, and TensorNet \cite{schutt2017,tholke2022,batzner2022,simeon2023}. For a small molecule such as aspirin, where the project is trying to learn a potential that will later be integrated in time, respecting these symmetries is especially important because any systematic violation can manifest as nonphysical force behavior.
+
+Using energies together with forces is also well motivated. Forces correspond to gradients of the potential energy surface, and each labeled configuration therefore carries much more differential information than a scalar energy label by itself. Chmiela et al.\ built the original MD17 force-field framing around precisely this idea, and later work has shown that gradients can dramatically affect both accuracy and data efficiency when the task is to learn a usable potential surface \cite{chmiela2017,christensen2020}. In a project aimed at molecular dynamics rather than only energy ranking, deprioritizing forces would be difficult to defend.
+
+Using delta-learning with an analytic baseline is a sound strategy when the baseline captures low-frequency or easily modeled structure and the neural network can focus on the residual. In this repository, the baseline is not a toy additive constant but a force-field-based approximation derived from aspirin topology information. That matters because it injects domain structure directly into the learned representation. Ramakrishnan et al.\ showed that delta-learning can substantially improve predictive efficiency by correcting an approximate model rather than replacing it outright \cite{ramakrishnan2015}. The same principle is applicable here. A hybrid potential can be easier to optimize, more interpretable in failure analysis, and potentially more data efficient than a pure black-box network.
+
+Using contiguous trajectory splits and explicit rollout evaluation is also methodologically appropriate for MD17-style data. Trajectory data are serially correlated, and naive randomized splitting can overstate generalization. Christensen and von Lilienfeld highlighted both numerical-noise and correlation concerns in the MD17 family and argued for more careful benchmark handling \cite{christensen2020}. The project's current split strategy therefore points in the right direction. At the same time, because the code still relies on MD17 rather than rMD17, the dataset choice remains a future methodological liability for publication-quality benchmarking. That does not invalidate the software effort, but it does mean that claims should eventually be checked on a cleaner benchmark.
+
+Adding physics-informed losses makes sense because the intended downstream task is simulation. A model that is slightly worse on a static metric but materially better in drift and force stability may still be the better scientific model for molecular dynamics. The broader machine-learning-force-field literature increasingly emphasizes this distinction, and review articles now treat simulation behavior, uncertainty, and robustness as central concerns rather than secondary ones \cite{unke2021}. In this project, the momentum and NVE regularizers are an attempt to move from purely local regression toward weak dynamical consistency. That is a defensible research direction and one that is sufficiently distinct to support a publication if the empirical evidence becomes stronger.
+
+\section{Current Experimental Position}
+
+The current results show a mixed but genuinely interesting picture. The strongest positive signal is that the physics-informed best checkpoint appears to improve force error and drift relative to the matched standard checkpoint in the saved comparison artifacts. In the best Optuna comparison, force MAE decreases from roughly 1.64 to 1.40 and the mean drift proxy decreases from roughly 8.40 to 5.43. That pattern is scientifically meaningful because it suggests that the extra regularization may be helping the model in the regime that matters most for dynamics. If that effect survives reruns across seeds and cleaner benchmarking, it could become the core empirical claim of the project.
+
+At the same time, the current Optuna run is not yet publication-grade evidence. The search completed only two of twenty-four screen trials and one of eight full trials, with the remainder pruned. That means the reported best trial is not a robust optimum over the search space. It is effectively the only full trial that survived. There is also an inconsistency in the saved metadata, where the trial artifacts expose both a large validation loss and a much smaller checkpoint score as if they were comparable notions of the same objective. That bookkeeping issue does not necessarily mean the model itself is unusable, but it does mean the hyperparameter-selection story is not yet clean enough for a paper.
+
+There is a second major caution: the saved comparison reports energy MAEs on the order of hundreds of thousands of electron volts, which is not physically plausible when viewed against the smaller-grid experiment summaries and strongly suggests an energy-offset or evaluation bug in the absolute-energy reporting path. Given that the project reconstructs absolute energies in delta-learning mode by combining a learned residual with a large baseline offset, this is the most likely place where a bookkeeping error can contaminate a metric without necessarily destroying relative force comparisons. This is exactly the kind of issue that must be fixed before any manuscript is drafted around quantitative energy claims.
+
+Taken together, the current state of the project is promising but pre-publication. The software stack is coherent, the scientific motivation is reasonable, and the force-and-drift improvements are worth pursuing. However, the benchmark protocol, metric consistency, and hyperparameter search reliability all need another round of refinement before the work can support strong claims.
+
+\section{Next Steps}
+
+The highest-priority next step is to repair the absolute-energy evaluation path and verify whether the extreme energy errors are purely an offset-reporting problem or a deeper issue in reconstruction. Until that is resolved, the project should avoid making any quantitative claim about energy accuracy. The next step after that is to replace or at least supplement MD17 with rMD17 for aspirin. Christensen and von Lilienfeld's revised dataset was introduced precisely because the original MD17 labels contain problematic numerical noise, and using rMD17 would materially strengthen the methodological credibility of the work \cite{christensen2020}. If the code remains on MD17 for continuity, the eventual paper should at minimum acknowledge the limitation and include a confirmatory experiment on rMD17.
+
+The Optuna pipeline should then be rerun with a less aggressive pruning strategy and a larger number of completed full trials. At present, the search says more about pruning behavior than about the response surface of the hyperparameters. For publication, the model-selection narrative needs several completed trials, ideally followed by fixed-configuration reruns across multiple random seeds. Seed variance is essential because a single best run is not enough to establish that a force-field improvement is reproducible rather than accidental. A strong version of this paper would report means and standard deviations for force MAE, drift proxies, and rollout stability over repeated trainings.
+
+The physics-informed losses also deserve ablations. The project should separate the effects of delta-learning, momentum regularization, and NVE regularization rather than presenting them as one monolithic package. That would allow the paper to answer a sharper scientific question: whether improved rollout behavior comes primarily from residual learning, from explicit dynamical regularization, or from their interaction. This matters because a publishable result is stronger when it explains which mechanism is responsible for the gain.
+
+The rollout evaluation should be expanded as well. The current NVE analysis is directionally correct, but the paper would be stronger with clearer reporting of drift distributions, failure rates, trajectory lengths, and sensitivity to timestep. Since learned potentials are meant to generate dynamics, a figure that shows stable versus unstable rollout regimes across models and timesteps could become one of the central results. If the project ultimately argues that physics-informed training improves simulation usability more than it improves static regression, then the evaluation section should be designed around exactly that claim.
+
+\section{Academic Paper Outline}
+
+The paper can be organized around the argument that a machine-learned molecular potential intended for simulation should be optimized and evaluated with dynamical behavior in mind rather than only static test-set error. The introduction should begin from the classical tradeoff in molecular dynamics between ab initio accuracy and force-field efficiency, then position machine-learned force fields as an attempt to bridge that gap \cite{unke2021,chmiela2018}. It should narrow quickly to the specific challenge addressed here: standard supervised training can fit local observables well while still producing trajectories with undesirable drift or instability. The introduction should then state that this project studies a hybrid, delta-learned, equivariant molecular potential for aspirin and tests whether adding lightweight physics-informed regularization improves force fidelity and short-horizon dynamical behavior.
+
+The methods section should describe the dataset, the contiguous splitting policy, the baseline analytic potential, the TensorNet-based neural model, and the distinction between the standard and physics-informed training objectives. This section should explain the scientific role of each component rather than merely listing implementation details. The dataset subsection should justify the split policy in light of temporal correlation concerns \cite{christensen2020}. The model subsection should justify equivariance and force-based learning \cite{tholke2022,simeon2023,batzner2022}. The hybrid-potential subsection should motivate delta-learning as residual correction over an interpretable baseline \cite{ramakrishnan2015}. The regularization subsection should explain momentum and NVE penalties as soft constraints intended to improve rollout behavior without giving up supervised accuracy.
+
+The experiments section should present two layers of evidence. The first layer should report standard supervised metrics for energies and forces, with careful explanation of any absolute-energy offset handling. The second layer should emphasize dynamical metrics such as drift, failure rate, and rollout stability under velocity Verlet integration \cite{verlet1967}. If the energy bookkeeping issue is fixed, the experiments can then ask whether physics-informed regularization changes the tradeoff between regression accuracy and simulation quality. If the issue is not fixed, the paper should avoid overclaiming on energy regression and focus on force and trajectory metrics.
+
+The results and discussion section should be written around the project's most defensible finding, which is currently the apparent improvement in force MAE and drift for the physics-informed model. This section should discuss whether those gains are robust across seeds, whether they persist on rMD17, and whether they come from the NVE term, the momentum term, or the delta-learning formulation. It should also confront limitations directly, including dataset choice, sensitivity to pruning in hyperparameter optimization, and the risk that better local metrics do not always guarantee better long-horizon dynamics. A candid discussion of these limits would strengthen rather than weaken the paper because this is an active research area with well-known benchmark pitfalls \cite{unke2021,christensen2020}.
+
+The conclusion should state that the contribution is not merely another molecular benchmark run, but a practical training-and-evaluation framework for asking whether a learned molecular potential is fit for simulation. If the revised experiments confirm the current trend, the concluding claim can be that weak physics-based regularization improves dynamic usability at modest implementation cost in an equivariant, delta-learned molecular potential for aspirin. That claim would be specific, defensible, and scientifically interesting without promising more than the current project can justify.
+
+\begin{thebibliography}{10}
+
+\bibitem{unke2021}
+Oliver T. Unke, Stefan Chmiela, Huziel E. Sauceda, Michael Gastegger, Igor Poltavsky, Kristof T. Sch\"utt, Alexandre Tkatchenko, and Klaus-Robert M\"uller.
+\newblock Machine Learning Force Fields.
+\newblock {\em Chemical Reviews}, 121(16):10142--10186, 2021.
+\newblock \url{https://doi.org/10.1021/acs.chemrev.0c01111}
+
+\bibitem{chmiela2017}
+Stefan Chmiela, Alexandre Tkatchenko, Huziel E. Sauceda, Igor Poltavsky, Kristof T. Sch\"utt, and Klaus-Robert M\"uller.
+\newblock Machine Learning of Accurate Energy-Conserving Molecular Force Fields.
+\newblock {\em Science Advances}, 3(5):e1603015, 2017.
+\newblock \url{https://doi.org/10.1126/sciadv.1603015}
+
+\bibitem{tholke2022}
+Philipp Th\"olke and Gianni De Fabritiis.
+\newblock TorchMD-NET: Equivariant Transformers for Neural Network Based Molecular Potentials.
+\newblock In {\em International Conference on Learning Representations}, 2022.
+\newblock \url{https://doi.org/10.48550/arXiv.2202.02541}
+
+\bibitem{simeon2023}
+Guillem Simeon and Gianni De Fabritiis.
+\newblock TensorNet: Cartesian Tensor Representations for Efficient Learning of Molecular Potentials.
+\newblock In {\em Advances in Neural Information Processing Systems 36}, 2023.
+\newblock \url{https://proceedings.neurips.cc/paper_files/paper/2023/hash/75c2ec5f98d7b2f50ad68033d2c07086-Abstract-Conference.html}
+
+\bibitem{batzner2022}
+Simon Batzner, Albert Musaelian, Lixin Sun, Mario Geiger, Jonathan P. Mailoa, Mordechai Kornbluth, Nicola Molinari, Tess E. Smidt, and Boris Kozinsky.
+\newblock E(3)-Equivariant Graph Neural Networks for Data-Efficient and Accurate Interatomic Potentials.
+\newblock {\em Nature Communications}, 13:2453, 2022.
+\newblock \url{https://doi.org/10.1038/s41467-022-29939-5}
+
+\bibitem{christensen2020}
+Anders S. Christensen and O. Anatole von Lilienfeld.
+\newblock On the Role of Gradients for Machine Learning of Molecular Energies and Forces.
+\newblock {\em Machine Learning: Science and Technology}, 1(4):045018, 2020.
+\newblock \url{https://doi.org/10.1088/2632-2153/abba6f}
+
+\bibitem{ramakrishnan2015}
+Raghunathan Ramakrishnan, Pavlo O. Dral, Matthias Rupp, and O. Anatole von Lilienfeld.
+\newblock Big Data Meets Quantum Chemistry Approximations: The Delta-Machine Learning Approach.
+\newblock {\em Journal of Chemical Theory and Computation}, 11(5):2087--2096, 2015.
+\newblock \url{https://doi.org/10.1021/acs.jctc.5b00099}
+
+\bibitem{chmiela2018}
+Stefan Chmiela, Huziel E. Sauceda, Klaus-Robert M\"uller, and Alexandre Tkatchenko.
+\newblock Towards Exact Molecular Dynamics Simulations with Machine-Learned Force Fields.
+\newblock {\em Nature Communications}, 9:3887, 2018.
+\newblock \url{https://doi.org/10.1038/s41467-018-06169-2}
+
+\bibitem{verlet1967}
+Loup Verlet.
+\newblock Computer Experiments on Classical Fluids. I. Thermodynamical Properties of Lennard-Jones Molecules.
+\newblock {\em Physical Review}, 159(1):98--103, 1967.
+\newblock \url{https://doi.org/10.1103/PhysRev.159.98}
+
+\bibitem{schutt2017}
+Kristof T. Sch\"utt, Pieter-Jan Kindermans, Huziel E. Sauceda, Stefan Chmiela, Alexandre Tkatchenko, and Klaus-Robert M\"uller.
+\newblock SchNet: A Continuous-Filter Convolutional Neural Network for Modeling Quantum Interactions.
+\newblock In {\em Advances in Neural Information Processing Systems 30}, 2017.
+\newblock \url{https://proceedings.neurips.cc/paper/2017/hash/303ed4c69846ab36c2904d3ba8573050-Abstract.html}
+
+\end{thebibliography}
+
+\end{document}

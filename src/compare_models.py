@@ -156,20 +156,30 @@ def evaluate_on_dataset(model, dataset, device="cuda", batch_size=32, max_sample
 
 
 def compute_metrics(results):
-    """Compute MAE/RMSE/max-error and R2 for energy and forces."""
+    """Compute offset-aligned energy metrics plus force metrics.
+
+    A learned potential can differ from the reference by an arbitrary constant
+    energy shift while preserving physically relevant relative energies and
+    forces. We therefore align a constant bias before reporting energy MAE/RMSE.
+    """
     energy_pred = results["energy_pred"].flatten()
     energy_true = results["energy_true"].flatten()
     force_pred = results["force_pred"].flatten()
     force_true = results["force_true"].flatten()
 
+    # Align the global energy zero before scalar-error metrics.
+    energy_bias = float(np.mean(energy_pred - energy_true))
+    energy_pred_aligned = energy_pred - energy_bias
+
     return {
-        "energy_mae": float(np.mean(np.abs(energy_pred - energy_true))),
-        "energy_rmse": float(np.sqrt(np.mean((energy_pred - energy_true) ** 2))),
-        "energy_max_error": float(np.max(np.abs(energy_pred - energy_true))),
+        "energy_bias": energy_bias,
+        "energy_mae": float(np.mean(np.abs(energy_pred_aligned - energy_true))),
+        "energy_rmse": float(np.sqrt(np.mean((energy_pred_aligned - energy_true) ** 2))),
+        "energy_max_error": float(np.max(np.abs(energy_pred_aligned - energy_true))),
         "force_mae": float(np.mean(np.abs(force_pred - force_true))),
         "force_rmse": float(np.sqrt(np.mean((force_pred - force_true) ** 2))),
         "force_max_error": float(np.max(np.abs(force_pred - force_true))),
-        "energy_r2": float(np.corrcoef(energy_pred, energy_true)[0, 1] ** 2),
+        "energy_r2": float(np.corrcoef(energy_pred_aligned, energy_true)[0, 1] ** 2),
         "force_r2": float(np.corrcoef(force_pred, force_true)[0, 1] ** 2),
     }
 
@@ -213,17 +223,19 @@ def plot_parity(standard_results, physics_results, output_dir):
     """Create parity plots for both models (energy and forces)."""
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
 
-    e_pred = standard_results["energy_pred"].flatten()
     e_true = standard_results["energy_true"].flatten()
+    e_pred = standard_results["energy_pred"].flatten()
+    e_pred = e_pred - np.mean(e_pred - e_true)
     axes[0, 0].scatter(e_true, e_pred, alpha=0.3, s=10)
     axes[0, 0].plot([e_true.min(), e_true.max()], [e_true.min(), e_true.max()], "r--", lw=2)
-    axes[0, 0].set_title("Standard - Energy")
+    axes[0, 0].set_title("Standard - Energy (bias aligned)")
 
-    e_pred = physics_results["energy_pred"].flatten()
     e_true = physics_results["energy_true"].flatten()
+    e_pred = physics_results["energy_pred"].flatten()
+    e_pred = e_pred - np.mean(e_pred - e_true)
     axes[0, 1].scatter(e_true, e_pred, alpha=0.3, s=10)
     axes[0, 1].plot([e_true.min(), e_true.max()], [e_true.min(), e_true.max()], "r--", lw=2)
-    axes[0, 1].set_title("Physics-Informed - Energy")
+    axes[0, 1].set_title("Physics-Informed - Energy (bias aligned)")
 
     f_pred = standard_results["force_pred"].flatten()
     f_true = standard_results["force_true"].flatten()
@@ -249,13 +261,15 @@ def plot_error_distributions(standard_results, physics_results, output_dir):
     """Create histogram plots of prediction errors."""
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-    err = (standard_results["energy_pred"] - standard_results["energy_true"]).flatten()
+    std_energy_err = (standard_results["energy_pred"] - standard_results["energy_true"]).flatten()
+    err = std_energy_err - np.mean(std_energy_err)
     axes[0, 0].hist(err, bins=50, alpha=0.7, edgecolor="black")
-    axes[0, 0].set_title("Standard - Energy Error")
+    axes[0, 0].set_title("Standard - Energy Error (bias aligned)")
 
-    err = (physics_results["energy_pred"] - physics_results["energy_true"]).flatten()
+    phys_energy_err = (physics_results["energy_pred"] - physics_results["energy_true"]).flatten()
+    err = phys_energy_err - np.mean(phys_energy_err)
     axes[0, 1].hist(err, bins=50, alpha=0.7, edgecolor="black", color="orange")
-    axes[0, 1].set_title("Physics-Informed - Energy Error")
+    axes[0, 1].set_title("Physics-Informed - Energy Error (bias aligned)")
 
     err = (standard_results["force_pred"] - standard_results["force_true"]).flatten()
     axes[1, 0].hist(err, bins=50, alpha=0.7, edgecolor="black")

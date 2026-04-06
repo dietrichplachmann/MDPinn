@@ -70,7 +70,7 @@
       "name": "aspirin_optuna_physics",
       "runner": "optuna",
       "molecule": "aspirin",
-      "overwrite_existing": true,
+      "overwrite_existing": false,
       "epochs": 10,
       "run_compare": true,
       "run_rollout": true,
