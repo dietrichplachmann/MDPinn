@@ -70,7 +70,7 @@
       "name": "aspirin_optuna_physics",
       "runner": "optuna",
       "molecule": "aspirin",
-      "overwrite_existing": true,
+      "overwrite_existing": false,
       "epochs": 10,
       "run_compare": true,
       "run_rollout": true,
@@ -90,7 +90,7 @@
           "max_epochs": 10,
           "num_workers": 0,
           "enable_progress_bar": true,
-          "val_check_interval": 0.5,
+          "check_val_every_n_epoch": 1,
           "num_sanity_val_steps": 0
         },
         "sampler": {
@@ -226,17 +226,12 @@
           "n_trials": 24,
           "trainer": {
             "max_epochs": 4,
-            "val_check_interval": 0.25,
+            "check_val_every_n_epoch": 1,
             "limit_train_batches": 0.25,
             "limit_val_batches": 0.5
           },
           "pruner": {
-            "name": "SuccessiveHalvingPruner",
-            "kwargs": {
-              "min_resource": 1,
-              "reduction_factor": 2,
-              "min_early_stopping_rate": 0
-            }
+            "name": "NopPruner"
           },
           "promote_best_params_to_next": true
         },
@@ -245,16 +240,16 @@
           "n_trials": 8,
           "trainer": {
             "max_epochs": 20,
-            "val_check_interval": 0.5,
+            "check_val_every_n_epoch": 1,
             "limit_train_batches": 1.0,
             "limit_val_batches": 1.0
           },
           "pruner": {
-            "name": "SuccessiveHalvingPruner",
+            "name": "MedianPruner",
             "kwargs": {
-              "min_resource": 1,
-              "reduction_factor": 3,
-              "min_early_stopping_rate": 0
+              "n_startup_trials": 8,
+              "n_warmup_steps": 2000,
+              "interval_steps": 200
             }
           },
           "search_space": {
