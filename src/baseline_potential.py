@@ -26,6 +26,7 @@ FF_BONDED = CHARMM36_DIR / "ffbonded.itp"
 FF_NONBONDED = CHARMM36_DIR / "ffnonbonded.itp"
 ASP_FF_BONDED = CHARMM36_DIR / "asp_ffbonded.itp"
 ASPIRIN_OFFSET = DATA_ROOT / "aspirin_reference_offset.json"
+OFFSET_CACHE = DATA_ROOT / "reference_offset_cache.json"
 KJMOL_TO_EV = 0.01036427230133138
 ASPIRIN_DEFAULT_ENERGY_OFFSET_EV = 406757.03125
 _ATOM_ORDER_CACHE: dict[tuple[int, ...], list[int]] = {}
@@ -145,6 +146,136 @@ def load_reference_energy_offset_eV(molecule: str | None = None) -> float:
     with open(ASPIRIN_OFFSET, "r") as handle:
         payload = json.load(handle)
     return float(payload.get("energy_offset_eV", ASPIRIN_DEFAULT_ENERGY_OFFSET_EV))
+
+
+def _load_offset_cache() -> dict:
+    if not OFFSET_CACHE.exists():
+        return {}
+    with open(OFFSET_CACHE, "r") as handle:
+        return json.load(handle)
+
+
+def _write_offset_cache(payload: dict):
+    OFFSET_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    with open(OFFSET_CACHE, "w") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+
+
+def _offset_cache_key(
+    molecule: str,
+    dataset: str,
+    epsilon_eV: float,
+    sigma_A: float,
+    r_cut_A: float,
+    sample_count: int,
+    train_frac: float,
+    val_frac: float,
+) -> str:
+    return "|".join(
+        [
+            f"molecule={molecule.lower()}",
+            f"dataset={dataset}",
+            f"eps={epsilon_eV:.12g}",
+            f"sigma={sigma_A:.12g}",
+            f"cutoff={r_cut_A:.12g}",
+            f"samples={sample_count}",
+            f"train_frac={train_frac:.6f}",
+            f"val_frac={val_frac:.6f}",
+        ]
+    )
+
+
+def calibrate_reference_energy_offset_eV(
+    molecule: str,
+    dataset: str = "MD17",
+    data_root: str | Path = "./data",
+    epsilon_eV: float = 0.01,
+    sigma_A: float = 1.0,
+    r_cut_A: float = 5.0,
+    sample_count: int = 2048,
+    train_frac: float = 0.8,
+    val_frac: float = 0.1,
+    force_recompute: bool = False,
+) -> float:
+    """Estimate a parameter-specific constant energy zero for delta-learning.
+
+    The delta target is `E_true - E_ref`. For a baseline with the correct energy
+    zero, the mean residual over the train split should be near zero. We therefore
+    estimate the needed offset as mean(raw_baseline_energy - reference_energy).
+
+    The estimate is cached on disk because this is expensive and may be reused by
+    Optuna reruns that revisit the same baseline hyperparameters.
+    """
+    if (molecule or "").lower() != "aspirin":
+        return load_reference_energy_offset_eV(molecule)
+    if dataset != "MD17":
+        raise NotImplementedError(
+            f"Offset calibration currently supports aspirin on MD17 only (got dataset='{dataset}')."
+        )
+
+    cache_key = _offset_cache_key(
+        molecule=molecule,
+        dataset=dataset,
+        epsilon_eV=float(epsilon_eV),
+        sigma_A=float(sigma_A),
+        r_cut_A=float(r_cut_A),
+        sample_count=int(sample_count),
+        train_frac=float(train_frac),
+        val_frac=float(val_frac),
+    )
+    cache = _load_offset_cache()
+    if not force_recompute and cache_key in cache:
+        return float(cache[cache_key]["energy_offset_eV"])
+
+    from torchmdnet.datasets import MD17
+    from data_splits import contiguous_split
+
+    full_dataset = MD17(root=str(data_root), molecules=molecule)
+    train_data, _, _ = contiguous_split(full_dataset, train_frac=train_frac, val_frac=val_frac)
+    train_indices = list(getattr(train_data, "indices", []))
+    if not train_indices:
+        raise RuntimeError("Could not build a non-empty train split for offset calibration.")
+
+    requested_sample_count = max(1, min(int(sample_count), len(train_indices)))
+    if requested_sample_count == len(train_indices):
+        sample_indices = train_indices
+    else:
+        step = (len(train_indices) - 1) / float(requested_sample_count - 1) if requested_sample_count > 1 else 0.0
+        sample_indices = [train_indices[int(round(i * step))] for i in range(requested_sample_count)]
+        sample_indices = list(dict.fromkeys(sample_indices))
+    actual_sample_count = len(sample_indices)
+
+    raw_minus_true = []
+    for dataset_idx in sample_indices:
+        sample = full_dataset[int(dataset_idx)]
+        y_true = sample.y
+        y_true = float(y_true.item() if hasattr(y_true, "item") else y_true[0])
+        raw_energy, _ = reference_energy_forces(
+            z=sample.z,
+            pos=sample.pos,
+            molecule=molecule,
+            box_l=getattr(sample, "box", None),
+            epsilon_eV=float(epsilon_eV),
+            sigma_A=float(sigma_A),
+            r_cut_A=float(r_cut_A),
+            energy_offset_eV=0.0,
+        )
+        raw_minus_true.append(float(raw_energy.item()) - y_true)
+
+    offset = float(sum(raw_minus_true) / len(raw_minus_true))
+    cache[cache_key] = {
+        "energy_offset_eV": offset,
+        "molecule": molecule,
+        "dataset": dataset,
+        "epsilon_eV": float(epsilon_eV),
+        "sigma_A": float(sigma_A),
+        "r_cut_A": float(r_cut_A),
+        "sample_count": int(actual_sample_count),
+        "train_frac": float(train_frac),
+        "val_frac": float(val_frac),
+    }
+    _write_offset_cache(cache)
+    return offset
 
 
 @lru_cache(maxsize=1)

@@ -26,7 +26,11 @@ from torch_geometric.loader import DataLoader as GeometricDataLoader
 from torchmdnet.datasets import MD17
 from torchmdnet.module import LNNP
 
-from baseline_potential import load_reference_energy_offset_eV, reference_energy_forces_batched
+from baseline_potential import (
+    calibrate_reference_energy_offset_eV,
+    load_reference_energy_offset_eV,
+    reference_energy_forces_batched,
+)
 from data_splits import contiguous_split
 
 
@@ -169,6 +173,20 @@ def train_standard_model(
     val_loader = GeometricDataLoader(val_data, batch_size=batch_size, num_workers=num_workers)
     test_loader = GeometricDataLoader(test_data, batch_size=batch_size, num_workers=num_workers)
 
+    baseline_energy_offset_eV = float(load_reference_energy_offset_eV(molecule))
+    if delta_learning:
+        baseline_energy_offset_eV = float(
+            calibrate_reference_energy_offset_eV(
+                molecule=molecule,
+                dataset=dataset,
+                data_root="./data",
+                epsilon_eV=baseline_epsilon_eV,
+                sigma_A=baseline_sigma_A,
+                r_cut_A=baseline_cutoff_A,
+            )
+        )
+        print(f"calibrated_baseline_energy_offset_eV={baseline_energy_offset_eV}")
+
     # Include delta settings in checkpoint hyperparameters for reproducible inference.
     # This is essential because evaluation/rollout must know whether to do:
     #   U_abs = U_model                      (absolute mode)
@@ -179,7 +197,7 @@ def train_standard_model(
         "baseline_epsilon_eV": float(baseline_epsilon_eV),
         "baseline_sigma_A": float(baseline_sigma_A),
         "baseline_cutoff_A": float(baseline_cutoff_A),
-        "baseline_energy_offset_eV": float(load_reference_energy_offset_eV(molecule)),
+        "baseline_energy_offset_eV": baseline_energy_offset_eV,
         "model": model_type,
         "prior_model": None,
         "output_model": "Scalar",
