@@ -38,6 +38,7 @@ from physics_losses import (
     periodic_bc_loss_improved,
     get_atomic_masses,
 )
+from training_history import MetricHistoryCallback
 
 
 # PyTorch 2.7 checkpoint compatibility.
@@ -505,6 +506,7 @@ def train_physics_informed_model(
         save_last=True,
     )
     early_stop = EarlyStopping(monitor="val_total_mse_loss", patience=30, mode="min")
+    history_callback = MetricHistoryCallback(save_dir, checkpoint_name)
     logger = TensorBoardLogger(save_dir=log_dir, name="physics_informed")
     trainer_callbacks = list(trainer_callbacks or [])
     trainer_kwargs = dict(trainer_kwargs or {})
@@ -513,7 +515,7 @@ def train_physics_informed_model(
         max_epochs=num_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
-        callbacks=[checkpoint_callback, early_stop, *trainer_callbacks],
+        callbacks=[checkpoint_callback, early_stop, history_callback, *trainer_callbacks],
         logger=logger,
         log_every_n_steps=10,
         gradient_clip_val=1000.0,
@@ -553,6 +555,11 @@ def train_physics_informed_model(
             "delta_learning": bool(delta_learning),
         },
         "validation_metrics": val_metrics,
+        "history_paths": {
+            "json": str(Path(save_dir) / f"{checkpoint_name}_history.json"),
+            "csv": str(Path(save_dir) / f"{checkpoint_name}_history.csv"),
+            "plot": str(Path(save_dir) / f"{checkpoint_name}_history.png"),
+        },
         "best_model_path": best_model_path,
         "best_model_score": best_model_score,
         "test_results": test_results[0] if test_results else None,
