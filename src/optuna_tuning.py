@@ -483,7 +483,22 @@ def _create_pruner(config: dict):
 
     pruner_cfg = config.get("pruner", {"name": "MedianPruner", "kwargs": {}})
     name = pruner_cfg.get("name", "MedianPruner")
-    kwargs = pruner_cfg.get("kwargs", {})
+    kwargs = dict(pruner_cfg.get("kwargs", {}))
+
+    # Stage configs are deep-merged with experiment defaults, so changing the
+    # pruner type can otherwise leave incompatible kwargs behind from the base
+    # pruner. Filter aggressively by constructor signature to keep mixed staged
+    # configs robust.
+    allowed_kwargs = {
+        "MedianPruner": {"n_startup_trials", "n_warmup_steps", "interval_steps", "n_min_trials"},
+        "SuccessiveHalvingPruner": {"min_resource", "reduction_factor", "min_early_stopping_rate", "bootstrap_count"},
+        "HyperbandPruner": {"min_resource", "max_resource", "reduction_factor", "bootstrap_count"},
+        "NopPruner": set(),
+    }
+    if name not in allowed_kwargs:
+        raise ValueError(f"Unsupported pruner '{name}'.")
+    kwargs = {key: value for key, value in kwargs.items() if key in allowed_kwargs[name]}
+
     if name == "MedianPruner":
         return optuna.pruners.MedianPruner(**kwargs)
     if name == "SuccessiveHalvingPruner":
