@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 7.186958100646734e-05,
+    "train_total_mse_loss": 7729070592.0,
+    "val_total_l1_loss": 18287.830078125,
+    "val_total_mse_loss": 6675287040.0,
+    "train_y_mse_loss": 154581385216.0,
+    "val_y_l1_loss": 365384.375,
+    "val_y_mse_loss": 133505736704.0,
+    "train_neg_dy_mse_loss": 749.7874145507812,
+    "val_neg_dy_l1_loss": 19.590394973754883,
+    "val_neg_dy_mse_loss": 695.6639404296875,
+    "train_loss_momentum": 5.527194370594235e-13,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 7729068032.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 7.186958100646734e-05,
+    "train_total_mse_loss": 4413923328.0,
+    "val_total_l1_loss": 9297.9150390625,
+    "val_total_mse_loss": 1722350208.0,
+    "train_y_mse_loss": 88278458368.0,
+    "val_y_l1_loss": 185599.015625,
+    "val_y_mse_loss": 34446987264.0,
+    "train_neg_dy_mse_loss": 698.7567749023438,
+    "val_neg_dy_l1_loss": 18.910490036010742,
+    "val_neg_dy_mse_loss": 644.1834106445312,
+    "train_loss_momentum": 5.305482182055288e-12,
+    "train_loss_nve": 1.875108819300933e-13,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0018946407362818718,
+    "train_total_with_physics": 4413925376.0
+  },
+  {
+    "epoch": 2.0,
+    "lr": 7.186958100646734e-05,
+    "train_total_mse_loss": 316496224.0,
+    "val_total_l1_loss": 14.673689842224121,
+    "val_total_mse_loss": 418.50372314453125,
+    "train_y_mse_loss": 6329910272.0,
+    "val_y_l1_loss": 52.48952102661133,
+    "val_y_mse_loss": 2809.589599609375,
+    "train_neg_dy_mse_loss": 736.4102783203125,
+    "val_neg_dy_l1_loss": 12.683381080627441,
+    "val_neg_dy_mse_loss": 292.6571044921875,
+    "train_loss_momentum": 7.261675150083136e-10,
+    "train_loss_nve": 5.801611795142048e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0037892814725637436,
+    "train_total_with_physics": 316495712.0
+  }
+]

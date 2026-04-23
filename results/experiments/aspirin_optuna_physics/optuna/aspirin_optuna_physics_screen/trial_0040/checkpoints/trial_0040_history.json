@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 0.0001939289941219613,
+    "train_total_mse_loss": 4547048960.0,
+    "val_total_l1_loss": 43.67283630371094,
+    "val_total_mse_loss": 13629.2216796875,
+    "train_y_mse_loss": 90940956672.0,
+    "val_y_l1_loss": 509.55731201171875,
+    "val_y_mse_loss": 259734.09375,
+    "train_neg_dy_mse_loss": 953.3610229492188,
+    "val_neg_dy_l1_loss": 19.152606964111328,
+    "val_neg_dy_mse_loss": 676.3342895507812,
+    "train_loss_momentum": 3.666141001890111e-10,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 4547046912.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 0.0001939289941219613,
+    "train_total_mse_loss": 5571.806640625,
+    "val_total_l1_loss": 16.999753952026367,
+    "val_total_mse_loss": 2368.709228515625,
+    "train_y_mse_loss": 102609.6015625,
+    "val_y_l1_loss": 214.08218383789062,
+    "val_y_mse_loss": 45844.39453125,
+    "train_neg_dy_mse_loss": 464.55377197265625,
+    "val_neg_dy_l1_loss": 6.626995086669922,
+    "val_neg_dy_mse_loss": 80.51534271240234,
+    "train_loss_momentum": 1.3159421330399823e-09,
+    "train_loss_nve": 3.0211534229190873e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.006289045326411724,
+    "train_total_with_physics": 5571.8017578125
+  },
+  {
+    "epoch": 2.0,
+    "lr": 0.0001939289941219613,
+    "train_total_mse_loss": 4479.25341796875,
+    "val_total_l1_loss": 15.701536178588867,
+    "val_total_mse_loss": 1907.667236328125,
+    "train_y_mse_loss": 83171.4140625,
+    "val_y_l1_loss": 191.51976013183594,
+    "val_y_mse_loss": 36691.1015625,
+    "train_neg_dy_mse_loss": 337.56085205078125,
+    "val_neg_dy_l1_loss": 6.447945594787598,
+    "val_neg_dy_mse_loss": 76.96029663085938,
+    "train_loss_momentum": 1.1113566733556013e-09,
+    "train_loss_nve": 5.824692724670788e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.012578090652823448,
+    "train_total_with_physics": 4479.25146484375
+  }
+]

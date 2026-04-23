@@ -1,7 +1,0 @@
-{
-  "status": "pruned",
-  "exception": {
-    "type": "TrialPruned",
-    "message": ""
-  }
-}

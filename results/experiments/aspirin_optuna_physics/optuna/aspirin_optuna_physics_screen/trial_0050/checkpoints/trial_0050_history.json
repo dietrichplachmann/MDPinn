@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 0.00023980345577001572,
+    "train_total_mse_loss": 3764060672.0,
+    "val_total_l1_loss": 11.757312774658203,
+    "val_total_mse_loss": 311.4229431152344,
+    "train_y_mse_loss": 75281195008.0,
+    "val_y_l1_loss": 55.348445892333984,
+    "val_y_mse_loss": 3095.044921875,
+    "train_neg_dy_mse_loss": 909.5406494140625,
+    "val_neg_dy_l1_loss": 9.463044166564941,
+    "val_neg_dy_mse_loss": 164.91651916503906,
+    "train_loss_momentum": 5.59018831225444e-10,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 3764056576.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 0.00023980345577001572,
+    "train_total_mse_loss": 10127.17578125,
+    "val_total_l1_loss": 10.861268997192383,
+    "val_total_mse_loss": 307.5787658691406,
+    "train_y_mse_loss": 192139.0625,
+    "val_y_l1_loss": 60.3355598449707,
+    "val_y_mse_loss": 3654.20458984375,
+    "train_neg_dy_mse_loss": 547.6028442382812,
+    "val_neg_dy_l1_loss": 8.257359504699707,
+    "val_neg_dy_mse_loss": 131.4405517578125,
+    "train_loss_momentum": 1.1332087490600884e-09,
+    "train_loss_nve": 5.351166124795137e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.007382020819932222,
+    "train_total_with_physics": 10127.1787109375
+  },
+  {
+    "epoch": 2.0,
+    "lr": 0.00023980345577001572,
+    "train_total_mse_loss": 8921.8291015625,
+    "val_total_l1_loss": 16.029508590698242,
+    "val_total_mse_loss": 1894.9671630859375,
+    "train_y_mse_loss": 169927.15625,
+    "val_y_l1_loss": 190.42066955566406,
+    "val_y_mse_loss": 36270.83203125,
+    "train_neg_dy_mse_loss": 447.86273193359375,
+    "val_neg_dy_l1_loss": 6.851027011871338,
+    "val_neg_dy_mse_loss": 85.71112823486328,
+    "train_loss_momentum": 1.0480442069749074e-09,
+    "train_loss_nve": 2.9209677211705642e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.014764041639864445,
+    "train_total_with_physics": 8921.8251953125
+  }
+]

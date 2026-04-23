@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 0.0005897473893128335,
+    "train_total_mse_loss": 1650438400.0,
+    "val_total_l1_loss": 95.35970306396484,
+    "val_total_mse_loss": 72314.78125,
+    "train_y_mse_loss": 33008703488.0,
+    "val_y_l1_loss": 1179.014404296875,
+    "val_y_mse_loss": 1390295.625,
+    "train_neg_dy_mse_loss": 3193.706298828125,
+    "val_neg_dy_l1_loss": 38.32524108886719,
+    "val_neg_dy_mse_loss": 2947.3662109375,
+    "train_loss_momentum": 1.8927688305581114e-09,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 1650433536.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 0.0005897473893128335,
+    "train_total_mse_loss": 20319.900390625,
+    "val_total_l1_loss": 21.51060676574707,
+    "val_total_mse_loss": 824.9843139648438,
+    "train_y_mse_loss": 396367.0,
+    "val_y_l1_loss": 73.14342498779297,
+    "val_y_mse_loss": 5389.87451171875,
+    "train_neg_dy_mse_loss": 527.9473876953125,
+    "val_neg_dy_l1_loss": 18.793092727661133,
+    "val_neg_dy_mse_loss": 584.7269897460938,
+    "train_loss_momentum": 1.673318816841629e-09,
+    "train_loss_nve": 4.1382466030304155e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0022990519646555185,
+    "train_total_with_physics": 20319.90234375
+  },
+  {
+    "epoch": 2.0,
+    "lr": 0.0005897473893128335,
+    "train_total_mse_loss": 22416.693359375,
+    "val_total_l1_loss": 10.755683898925781,
+    "val_total_mse_loss": 465.05743408203125,
+    "train_y_mse_loss": 439289.125,
+    "val_y_l1_loss": 87.24384307861328,
+    "val_y_mse_loss": 7627.88134765625,
+    "train_neg_dy_mse_loss": 476.0392150878906,
+    "val_neg_dy_l1_loss": 6.729992389678955,
+    "val_neg_dy_mse_loss": 88.06674194335938,
+    "train_loss_momentum": 1.5781295159555953e-09,
+    "train_loss_nve": 4.064083704985455e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.004598103929311037,
+    "train_total_with_physics": 22416.703125
+  }
+]

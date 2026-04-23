@@ -1,23 +1,7 @@
 {
-  "batch_size": 32,
-  "lr": 6.266275266989062e-05,
-  "weight_decay": 2.9067012153229084e-06,
-  "embedding_dimension": 64,
-  "num_layers": 6,
-  "num_rbf": 32,
-  "energy_weight": 0.026936499376103165,
-  "force_weight": 0.9041806267695157,
-  "momentum_weight": 0.0013255655270810907,
-  "nve_weight": 0.029288779063673165,
-  "baseline_epsilon_eV": 0.03957518715404545,
-  "baseline_sigma_A": 1.3632112668138183,
-  "baseline_cutoff_A": 4.940849631032609,
-  "traj_length": 20,
-  "nve_freq": 50,
-  "nve_warmup_epochs": 0,
-  "nve_ramp_epochs": 1,
-  "nve_relative": false,
-  "nve_relative_eps": 1.8875676307822242e-07,
-  "nve_loss_mode": "total_energy",
-  "nve_dt_fs": 0.1
+  "lr": 0.000164092867306479,
+  "weight_decay": 4.809461967501564e-08,
+  "momentum_weight": 0.003252579649263976,
+  "nve_weight": 0.04744427686266667,
+  "baseline_epsilon_eV": 0.043709904681305034
 }

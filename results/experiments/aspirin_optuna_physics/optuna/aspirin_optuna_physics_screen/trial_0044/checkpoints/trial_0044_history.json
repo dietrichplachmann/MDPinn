@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 0.00017069224850274622,
+    "train_total_mse_loss": 5287845888.0,
+    "val_total_l1_loss": 3307.9345703125,
+    "val_total_mse_loss": 216734624.0,
+    "train_y_mse_loss": 105756909568.0,
+    "val_y_l1_loss": 65838.3046875,
+    "val_y_mse_loss": 4334683136.0,
+    "train_neg_dy_mse_loss": 667.0985717773438,
+    "val_neg_dy_l1_loss": 16.862340927124023,
+    "val_neg_dy_mse_loss": 512.576904296875,
+    "train_loss_momentum": 1.0444411828458566e-11,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 5287843328.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 0.00017069224850274622,
+    "train_total_mse_loss": 5050083.0,
+    "val_total_l1_loss": 14.922640800476074,
+    "val_total_mse_loss": 1470.0848388671875,
+    "train_y_mse_loss": 100984232.0,
+    "val_y_l1_loss": 166.17324829101562,
+    "val_y_mse_loss": 27632.083984375,
+    "train_neg_dy_mse_loss": 917.2952880859375,
+    "val_neg_dy_l1_loss": 6.962081432342529,
+    "val_neg_dy_mse_loss": 93.13734436035156,
+    "train_loss_momentum": 1.4762716604721504e-09,
+    "train_loss_nve": 5.380237921848163e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.00019478525791782886,
+    "train_total_with_physics": 5050078.0
+  },
+  {
+    "epoch": 2.0,
+    "lr": 0.00017069224850274622,
+    "train_total_mse_loss": 1603.9058837890625,
+    "val_total_l1_loss": 17.321115493774414,
+    "val_total_mse_loss": 2838.71728515625,
+    "train_y_mse_loss": 29054.96875,
+    "val_y_l1_loss": 235.7008056640625,
+    "val_y_mse_loss": 55564.07421875,
+    "train_neg_dy_mse_loss": 159.11312866210938,
+    "val_neg_dy_l1_loss": 5.827446460723877,
+    "val_neg_dy_mse_loss": 63.69862747192383,
+    "train_loss_momentum": 1.053347076229727e-09,
+    "train_loss_nve": 2.82624986781832e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0003895705158356577,
+    "train_total_with_physics": 1603.90576171875
+  }
+]

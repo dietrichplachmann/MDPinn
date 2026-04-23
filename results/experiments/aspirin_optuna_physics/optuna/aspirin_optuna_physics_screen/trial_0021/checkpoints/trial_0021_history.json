@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 0.000213420411455445,
+    "train_total_mse_loss": 4425335296.0,
+    "val_total_l1_loss": 45.25267791748047,
+    "val_total_mse_loss": 12409.275390625,
+    "train_y_mse_loss": 88506687488.0,
+    "val_y_l1_loss": 479.9519958496094,
+    "val_y_mse_loss": 230439.421875,
+    "train_neg_dy_mse_loss": 889.117919921875,
+    "val_neg_dy_l1_loss": 22.37376594543457,
+    "val_neg_dy_mse_loss": 934.0048828125,
+    "train_loss_momentum": 4.6164366773737697e-10,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 4425330176.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 0.000213420411455445,
+    "train_total_mse_loss": 7851.388671875,
+    "val_total_l1_loss": 15.855997085571289,
+    "val_total_mse_loss": 1279.667724609375,
+    "train_y_mse_loss": 144610.171875,
+    "val_y_l1_loss": 151.56954956054688,
+    "val_y_mse_loss": 22988.65625,
+    "train_neg_dy_mse_loss": 653.5579223632812,
+    "val_neg_dy_l1_loss": 8.713178634643555,
+    "val_neg_dy_mse_loss": 137.0894012451172,
+    "train_loss_momentum": 1.6968825233831808e-09,
+    "train_loss_nve": 1.1048773007615864e-11,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.00018315108900424093,
+    "train_total_with_physics": 7851.38916015625
+  },
+  {
+    "epoch": 2.0,
+    "lr": 0.000213420411455445,
+    "train_total_mse_loss": 1923.7210693359375,
+    "val_total_l1_loss": 11.84971809387207,
+    "val_total_mse_loss": 284.5836181640625,
+    "train_y_mse_loss": 36135.953125,
+    "val_y_l1_loss": 40.322837829589844,
+    "val_y_mse_loss": 1645.88818359375,
+    "train_neg_dy_mse_loss": 123.07734680175781,
+    "val_neg_dy_l1_loss": 10.351133346557617,
+    "val_neg_dy_mse_loss": 212.93601989746094,
+    "train_loss_momentum": 1.364901858202927e-09,
+    "train_loss_nve": 2.451983277876324e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.00036630217800848186,
+    "train_total_with_physics": 1923.7196044921875
+  }
+]

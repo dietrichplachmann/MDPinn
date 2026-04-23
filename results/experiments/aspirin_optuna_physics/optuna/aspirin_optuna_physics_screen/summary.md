@@ -1,48 +1,35 @@
 # aspirin_optuna_physics_screen
 
-- Generated: 2026-03-30T19:09:31.145038
+- Generated: 2026-04-15T21:21:33.286647
 - Mode: physics
 - Objective metric: val_total_mse_loss
 - Objective direction: minimize
-- Completed trials: 2
-- Pruned trials: 22
-- Failed trials: 0
+- Completed trials: 49
+- Pruned trials: 0
+- Failed trials: 2
 
 ## Best Trial
 
-- Trial: 0
-- Objective score: 672.432861328125
-- Objective metric value: 672.432861328125
-- Trial folder: `results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_screen/trial_0000`
-- Checkpoint: `/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_screen/trial_0000/checkpoints/trial_0000.ckpt`
+- Trial: 18
+- Objective score: 35.15608596801758
+- Objective metric value: 35.15608596801758
+- Trial folder: `results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_screen/trial_0018`
+- Checkpoint: `/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_screen/trial_0018/checkpoints/trial_0018.ckpt`
 
 ### Selected Parameters
 
-- `batch_size` = `32`
-- `lr` = `0.000291063591313307`
-- `weight_decay` = `2.4810409748678096e-06`
-- `embedding_dimension` = `64`
-- `num_layers` = `2`
-- `num_rbf` = `64`
-- `energy_weight` = `0.2097862337921012`
-- `force_weight` = `0.8009613865627863`
-- `momentum_weight` = `0.009091248360355032`
-- `nve_weight` = `0.00917022549267169`
-- `baseline_epsilon_eV` = `0.0032877474139911193`
-- `baseline_sigma_A` = `1.2871346474483567`
-- `baseline_cutoff_A` = `5.159725093210579`
-- `traj_length` = `30`
-- `nve_freq` = `50`
-- `nve_warmup_epochs` = `0`
-- `nve_ramp_epochs` = `5`
-- `nve_relative` = `False`
-- `nve_relative_eps` = `6.245139574743075e-05`
-- `nve_loss_mode` = `total_energy`
-- `nve_dt_fs` = `0.1`
+- `lr` = `0.00013450549446761007`
+- `weight_decay` = `6.82207877752534e-06`
+- `momentum_weight` = `0.021826533717324938`
+- `nve_weight` = `0.026844343989022516`
+- `baseline_epsilon_eV` = `0.02715794328712612`
 
 ## Top Trials
 
 | rank | trial | objective | status | metric | checkpoint |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 0 | 672.432861328125 | completed | 672.432861328125 | `/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_screen/trial_0000/checkpoints/trial_0000.ckpt` |
-| 2 | 3 | 8707.6806640625 | completed | 8707.6806640625 | `/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_screen/trial_0003/checkpoints/trial_0003.ckpt` |
+| 1 | 18 | 35.15608596801758 | completed | 35.15608596801758 | `/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_screen/trial_0018/checkpoints/trial_0018.ckpt` |
+| 2 | 32 | 40.7750129699707 | completed | 40.7750129699707 | `/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_screen/trial_0032/checkpoints/trial_0032.ckpt` |
+| 3 | 9 | 51.82218933105469 | completed | 51.82218933105469 | `/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_screen/trial_0009/checkpoints/trial_0009.ckpt` |
+| 4 | 26 | 61.16552734375 | completed | 61.16552734375 | `/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_screen/trial_0026/checkpoints/trial_0026.ckpt` |
+| 5 | 21 | 73.10918426513672 | completed | 73.10918426513672 | `/home/lachmadh/projects/MDPinn/results/experiments/aspirin_optuna_physics/optuna/aspirin_optuna_physics_screen/trial_0021/checkpoints/trial_0021.ckpt` |

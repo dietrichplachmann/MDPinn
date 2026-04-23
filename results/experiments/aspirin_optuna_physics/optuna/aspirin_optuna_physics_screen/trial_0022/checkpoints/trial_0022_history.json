@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 9.749094169819728e-05,
+    "train_total_mse_loss": 7349450240.0,
+    "val_total_l1_loss": 16569.6171875,
+    "val_total_mse_loss": 5479161856.0,
+    "train_y_mse_loss": 146988990464.0,
+    "val_y_l1_loss": 331033.5625,
+    "val_y_mse_loss": 109583237120.0,
+    "train_neg_dy_mse_loss": 725.821044921875,
+    "val_neg_dy_l1_loss": 18.880218505859375,
+    "val_neg_dy_mse_loss": 643.8776245117188,
+    "train_loss_momentum": 1.5694930164539267e-12,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 7349456384.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 9.749094169819728e-05,
+    "train_total_mse_loss": 2239910656.0,
+    "val_total_l1_loss": 59.29530715942383,
+    "val_total_mse_loss": 8565.2890625,
+    "train_y_mse_loss": 44798197760.0,
+    "val_y_l1_loss": 311.95037841796875,
+    "val_y_mse_loss": 97808.7890625,
+    "train_neg_dy_mse_loss": 779.6610717773438,
+    "val_neg_dy_l1_loss": 45.997676849365234,
+    "val_neg_dy_mse_loss": 3868.26318359375,
+    "train_loss_momentum": 3.280941074379484e-10,
+    "train_loss_nve": 3.1287862925499788e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.01155085302889347,
+    "train_total_with_physics": 2239910144.0
+  },
+  {
+    "epoch": 2.0,
+    "lr": 9.749094169819728e-05,
+    "train_total_mse_loss": 3056.834228515625,
+    "val_total_l1_loss": 8.309272766113281,
+    "val_total_mse_loss": 152.733154296875,
+    "train_y_mse_loss": 52056.27734375,
+    "val_y_l1_loss": 36.93864822387695,
+    "val_y_mse_loss": 1377.8564453125,
+    "train_neg_dy_mse_loss": 477.91619873046875,
+    "val_neg_dy_l1_loss": 6.802463054656982,
+    "val_neg_dy_mse_loss": 88.25296020507812,
+    "train_loss_momentum": 1.2542934468839917e-09,
+    "train_loss_nve": 4.008603778776765e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.02310170605778694,
+    "train_total_with_physics": 3056.83447265625
+  }
+]

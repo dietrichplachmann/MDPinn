@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 0.00015644267841707915,
+    "train_total_mse_loss": 6519017472.0,
+    "val_total_l1_loss": 11847.171875,
+    "val_total_mse_loss": 2799328768.0,
+    "train_y_mse_loss": 130380349440.0,
+    "val_y_l1_loss": 236614.765625,
+    "val_y_mse_loss": 55986556928.0,
+    "train_neg_dy_mse_loss": 703.8297119140625,
+    "val_neg_dy_l1_loss": 17.296207427978516,
+    "val_neg_dy_mse_loss": 538.1748046875,
+    "train_loss_momentum": 4.7440931391640184e-12,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 6519016448.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 0.00015644267841707915,
+    "train_total_mse_loss": 403674400.0,
+    "val_total_l1_loss": 5.946353435516357,
+    "val_total_mse_loss": 67.57786560058594,
+    "train_y_mse_loss": 8073476608.0,
+    "val_y_l1_loss": 11.019460678100586,
+    "val_y_mse_loss": 133.50526428222656,
+    "train_neg_dy_mse_loss": 623.1546020507812,
+    "val_neg_dy_l1_loss": 5.679347515106201,
+    "val_neg_dy_mse_loss": 64.1080093383789,
+    "train_loss_momentum": 9.17216969043011e-10,
+    "train_loss_nve": 5.037554574871539e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.005174505524337292,
+    "train_total_with_physics": 403673312.0
+  },
+  {
+    "epoch": 2.0,
+    "lr": 0.00015644267841707915,
+    "train_total_mse_loss": 3212.544677734375,
+    "val_total_l1_loss": 26.048255920410156,
+    "val_total_mse_loss": 2254.8671875,
+    "train_y_mse_loss": 59140.0625,
+    "val_y_l1_loss": 188.61001586914062,
+    "val_y_mse_loss": 35605.2734375,
+    "train_neg_dy_mse_loss": 268.9906921386719,
+    "val_neg_dy_l1_loss": 17.49237632751465,
+    "val_neg_dy_mse_loss": 499.58270263671875,
+    "train_loss_momentum": 1.1109306807810526e-09,
+    "train_loss_nve": 4.453759409883684e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.010349011048674583,
+    "train_total_with_physics": 3212.546875
+  }
+]

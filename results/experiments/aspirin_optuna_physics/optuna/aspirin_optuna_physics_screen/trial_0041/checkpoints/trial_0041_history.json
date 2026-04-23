@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 0.00035499039222486317,
+    "train_total_mse_loss": 2754486272.0,
+    "val_total_l1_loss": 87.83926391601562,
+    "val_total_mse_loss": 76225.4609375,
+    "train_y_mse_loss": 55089713152.0,
+    "val_y_l1_loss": 1223.3570556640625,
+    "val_y_mse_loss": 1497023.0,
+    "train_neg_dy_mse_loss": 863.8394775390625,
+    "val_neg_dy_l1_loss": 28.075166702270508,
+    "val_neg_dy_mse_loss": 1446.640625,
+    "train_loss_momentum": 9.332765671388188e-10,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 2754481152.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 0.00035499039222486317,
+    "train_total_mse_loss": 19845.67578125,
+    "val_total_l1_loss": 18.399646759033203,
+    "val_total_mse_loss": 1965.209228515625,
+    "train_y_mse_loss": 364235.1875,
+    "val_y_l1_loss": 191.0613555908203,
+    "val_y_mse_loss": 36523.66796875,
+    "train_neg_dy_mse_loss": 1719.91162109375,
+    "val_neg_dy_l1_loss": 9.312188148498535,
+    "val_neg_dy_mse_loss": 146.3429412841797,
+    "train_loss_momentum": 2.1438957276131987e-09,
+    "train_loss_nve": 7.628301636197765e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.009314783848822117,
+    "train_total_with_physics": 19845.669921875
+  },
+  {
+    "epoch": 2.0,
+    "lr": 0.00035499039222486317,
+    "train_total_mse_loss": 8903.541015625,
+    "val_total_l1_loss": 48.477867126464844,
+    "val_total_mse_loss": 34627.98046875,
+    "train_y_mse_loss": 170528.609375,
+    "val_y_l1_loss": 831.0651245117188,
+    "val_y_mse_loss": 690682.8125,
+    "train_neg_dy_mse_loss": 396.9585266113281,
+    "val_neg_dy_l1_loss": 7.289063930511475,
+    "val_neg_dy_mse_loss": 98.77399444580078,
+    "train_loss_momentum": 1.347818190389205e-09,
+    "train_loss_nve": 3.518157553478174e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.018629567697644234,
+    "train_total_with_physics": 8903.5361328125
+  }
+]

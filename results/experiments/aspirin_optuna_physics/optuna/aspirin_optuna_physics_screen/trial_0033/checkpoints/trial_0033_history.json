@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 0.00013311411021277308,
+    "train_total_mse_loss": 7031554048.0,
+    "val_total_l1_loss": 14615.6875,
+    "val_total_mse_loss": 4262227712.0,
+    "train_y_mse_loss": 140631080960.0,
+    "val_y_l1_loss": 291966.65625,
+    "val_y_mse_loss": 85244542976.0,
+    "train_neg_dy_mse_loss": 722.578125,
+    "val_neg_dy_l1_loss": 18.266342163085938,
+    "val_neg_dy_mse_loss": 598.5592651367188,
+    "train_loss_momentum": 1.3817202590415967e-12,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 7031558656.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 0.00013311411021277308,
+    "train_total_mse_loss": 1001874752.0,
+    "val_total_l1_loss": 17.014816284179688,
+    "val_total_mse_loss": 1648.6793212890625,
+    "train_y_mse_loss": 20037478400.0,
+    "val_y_l1_loss": 174.123779296875,
+    "val_y_mse_loss": 30343.408203125,
+    "train_neg_dy_mse_loss": 781.1502075195312,
+    "val_neg_dy_l1_loss": 8.74592399597168,
+    "val_neg_dy_mse_loss": 138.43043518066406,
+    "train_loss_momentum": 7.802815615853831e-10,
+    "train_loss_nve": 4.671502334269162e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0038150206673890352,
+    "train_total_with_physics": 1001872576.0
+  },
+  {
+    "epoch": 2.0,
+    "lr": 0.00013311411021277308,
+    "train_total_mse_loss": 3734.3583984375,
+    "val_total_l1_loss": 49.2356071472168,
+    "val_total_mse_loss": 8117.19189453125,
+    "train_y_mse_loss": 64385.16015625,
+    "val_y_l1_loss": 346.2960205078125,
+    "val_y_mse_loss": 120591.6484375,
+    "train_neg_dy_mse_loss": 542.210693359375,
+    "val_neg_dy_l1_loss": 33.60084915161133,
+    "val_neg_dy_mse_loss": 2197.483642578125,
+    "train_loss_momentum": 1.1594047943930264e-09,
+    "train_loss_nve": 6.560319561893513e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0076300413347780704,
+    "train_total_with_physics": 3734.359130859375
+  }
+]

@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 0.00037183641688898206,
+    "train_total_mse_loss": 2687834880.0,
+    "val_total_l1_loss": 16.225862503051758,
+    "val_total_mse_loss": 1857.2310791015625,
+    "train_y_mse_loss": 53756674048.0,
+    "val_y_l1_loss": 187.94227600097656,
+    "val_y_mse_loss": 35333.875,
+    "train_neg_dy_mse_loss": 1335.5802001953125,
+    "val_neg_dy_l1_loss": 7.188155651092529,
+    "val_neg_dy_mse_loss": 95.30231475830078,
+    "train_loss_momentum": 9.946562462559427e-10,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 2687830016.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 0.00037183641688898206,
+    "train_total_mse_loss": 10338.7109375,
+    "val_total_l1_loss": 151.49905395507812,
+    "val_total_mse_loss": 97062.7578125,
+    "train_y_mse_loss": 196575.828125,
+    "val_y_l1_loss": 1295.753173828125,
+    "val_y_mse_loss": 1679780.0,
+    "train_neg_dy_mse_loss": 536.7581176757812,
+    "val_neg_dy_l1_loss": 91.275146484375,
+    "val_neg_dy_mse_loss": 13761.8486328125,
+    "train_loss_momentum": 1.4095969946836817e-09,
+    "train_loss_nve": 5.475469036508862e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.009873459115624428,
+    "train_total_with_physics": 10338.7099609375
+  },
+  {
+    "epoch": 2.0,
+    "lr": 0.00037183641688898206,
+    "train_total_mse_loss": 10541.927734375,
+    "val_total_l1_loss": 20.216156005859375,
+    "val_total_mse_loss": 3907.20166015625,
+    "train_y_mse_loss": 203534.375,
+    "val_y_l1_loss": 276.7978210449219,
+    "val_y_mse_loss": 76629.1953125,
+    "train_neg_dy_mse_loss": 384.4303894042969,
+    "val_neg_dy_l1_loss": 6.711856365203857,
+    "val_neg_dy_mse_loss": 79.72844696044922,
+    "train_loss_momentum": 1.3107568364034705e-09,
+    "train_loss_nve": 4.081087030816111e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.019746918231248856,
+    "train_total_with_physics": 10541.9248046875
+  }
+]

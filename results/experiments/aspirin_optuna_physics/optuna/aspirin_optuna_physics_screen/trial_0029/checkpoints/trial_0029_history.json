@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 9.410405618837103e-05,
+    "train_total_mse_loss": 7304837120.0,
+    "val_total_l1_loss": 16345.9716796875,
+    "val_total_mse_loss": 5332209152.0,
+    "train_y_mse_loss": 146096717824.0,
+    "val_y_l1_loss": 326564.1875,
+    "val_y_mse_loss": 106644168704.0,
+    "train_neg_dy_mse_loss": 718.2633056640625,
+    "val_neg_dy_l1_loss": 18.697784423828125,
+    "val_neg_dy_mse_loss": 626.8613891601562,
+    "train_loss_momentum": 1.950964563512958e-12,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 7304833536.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 9.410405618837103e-05,
+    "train_total_mse_loss": 2044890112.0,
+    "val_total_l1_loss": 36.243797302246094,
+    "val_total_mse_loss": 3426.489501953125,
+    "train_y_mse_loss": 40897785856.0,
+    "val_y_l1_loss": 211.4519500732422,
+    "val_y_mse_loss": 45259.84765625,
+    "train_neg_dy_mse_loss": 674.5108642578125,
+    "val_neg_dy_l1_loss": 27.022315979003906,
+    "val_neg_dy_mse_loss": 1224.733154296875,
+    "train_loss_momentum": 2.9022639846942866e-10,
+    "train_loss_nve": 4.099218523217346e-13,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.008797647431492805,
+    "train_total_with_physics": 2044887808.0
+  },
+  {
+    "epoch": 2.0,
+    "lr": 9.410405618837103e-05,
+    "train_total_mse_loss": 2777.594482421875,
+    "val_total_l1_loss": 6.071937561035156,
+    "val_total_mse_loss": 67.56243133544922,
+    "train_y_mse_loss": 47600.79296875,
+    "val_y_l1_loss": 8.755694389343262,
+    "val_y_mse_loss": 87.427001953125,
+    "train_neg_dy_mse_loss": 418.47906494140625,
+    "val_neg_dy_l1_loss": 5.930687427520752,
+    "val_neg_dy_mse_loss": 66.51692199707031,
+    "train_loss_momentum": 1.1089985596512975e-09,
+    "train_loss_nve": 3.2361875765968273e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.01759529486298561,
+    "train_total_with_physics": 2777.59619140625
+  }
+]

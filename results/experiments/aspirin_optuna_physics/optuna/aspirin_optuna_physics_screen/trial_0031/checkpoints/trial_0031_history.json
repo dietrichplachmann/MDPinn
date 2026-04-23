@@ -1,0 +1,59 @@
+[
+  {
+    "epoch": 0
+  },
+  {
+    "epoch": 0.0,
+    "lr": 0.0002993792004417628,
+    "train_total_mse_loss": 2978064384.0,
+    "val_total_l1_loss": 40.93909454345703,
+    "val_total_mse_loss": 10164.599609375,
+    "train_y_mse_loss": 59561267200.0,
+    "val_y_l1_loss": 435.786865234375,
+    "val_y_mse_loss": 190013.625,
+    "train_neg_dy_mse_loss": 977.22216796875,
+    "val_neg_dy_l1_loss": 20.15763282775879,
+    "val_neg_dy_mse_loss": 698.861572265625,
+    "train_loss_momentum": 1.2850132069530673e-09,
+    "train_loss_nve": 0.0,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.0,
+    "train_total_with_physics": 2978060032.0
+  },
+  {
+    "epoch": 1.0,
+    "lr": 0.0002993792004417628,
+    "train_total_mse_loss": 17622.720703125,
+    "val_total_l1_loss": 210.20175170898438,
+    "val_total_mse_loss": 197376.171875,
+    "train_y_mse_loss": 327899.40625,
+    "val_y_l1_loss": 1845.68408203125,
+    "val_y_mse_loss": 3408899.75,
+    "train_neg_dy_mse_loss": 1292.3707275390625,
+    "val_neg_dy_l1_loss": 124.12374877929688,
+    "val_neg_dy_mse_loss": 28348.59765625,
+    "train_loss_momentum": 2.250099884193446e-09,
+    "train_loss_nve": 3.797802784061277e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.01169878151267767,
+    "train_total_with_physics": 17622.73046875
+  },
+  {
+    "epoch": 2.0,
+    "lr": 0.0002993792004417628,
+    "train_total_mse_loss": 15140.3232421875,
+    "val_total_l1_loss": 18.2337589263916,
+    "val_total_mse_loss": 2959.9794921875,
+    "train_y_mse_loss": 291401.625,
+    "val_y_l1_loss": 240.0496826171875,
+    "val_y_mse_loss": 57635.79296875,
+    "train_neg_dy_mse_loss": 600.2550048828125,
+    "val_neg_dy_l1_loss": 6.559237003326416,
+    "val_neg_dy_mse_loss": 82.30486297607422,
+    "train_loss_momentum": 1.8370754917285126e-09,
+    "train_loss_nve": 6.3632593118312375e-12,
+    "train_loss_pbc": 0.0,
+    "train_nve_weight_effective": 0.02339756302535534,
+    "train_total_with_physics": 15140.31640625
+  }
+]
