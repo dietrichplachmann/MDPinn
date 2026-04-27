@@ -484,6 +484,17 @@ def _mean_drift_by_step(lines):
     return xs, ys
 
 
+def _row_to_line(row):
+    if not row or row.get("failed"):
+        return None
+    series = row.get("series", {})
+    steps = series.get("step", [])
+    drifts = series.get("drift", [])
+    if not steps or not drifts or len(steps) != len(drifts):
+        return None
+    return np.asarray(steps, dtype=float), np.asarray(drifts, dtype=float)
+
+
 def plot_rollout_drift_comparison(standard_rollout, physics_rollout, out_path, title="Rollout Drift Comparison"):
     try:
         import matplotlib.pyplot as plt
@@ -529,6 +540,79 @@ def plot_rollout_drift_comparison(standard_rollout, physics_rollout, out_path, t
     ax1.set_ylabel("Drift (eV)")
     ax1.set_title("Drift Distribution")
     ax1.tick_params(axis="x", labelrotation=20)
+
+    fig.suptitle(title)
+    fig.tight_layout()
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote: {out_path}")
+
+
+def plot_single_rollout_drift_comparison(
+    standard_row,
+    physics_row,
+    out_path,
+    title="Single Rollout Drift Comparison",
+    standard_label="Standard",
+    physics_label="Physics",
+):
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        print(f"Warning: could not import matplotlib for drift plot: {exc}")
+        return
+
+    std_line = _row_to_line(standard_row)
+    phys_line = _row_to_line(physics_row)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    ax0, ax1 = axes
+
+    if std_line is not None:
+        ax0.plot(std_line[0], std_line[1], color="#1f77b4", linewidth=2.0, label=standard_label)
+    if phys_line is not None:
+        ax0.plot(phys_line[0], phys_line[1], color="#ff7f0e", linewidth=2.0, label=physics_label)
+    ax0.axhline(0.0, color="black", linewidth=1.0, linestyle="--")
+    ax0.set_xlabel("Step")
+    ax0.set_ylabel("Energy drift (eV)")
+    ax0.set_title("Drift Trajectory")
+    if std_line is not None or phys_line is not None:
+        ax0.legend(loc="best")
+    else:
+        ax0.text(0.5, 0.5, "No valid drift series", ha="center", va="center", transform=ax0.transAxes)
+
+    metric_rows = []
+    labels = []
+    if standard_row:
+        std_final = standard_row.get("final_drift")
+        std_max = standard_row.get("max_abs_drift")
+        if std_final is not None and std_max is not None:
+            metric_rows.append([abs(float(std_final)), float(std_max)])
+            labels.append(standard_label)
+    if physics_row:
+        phys_final = physics_row.get("final_drift")
+        phys_max = physics_row.get("max_abs_drift")
+        if phys_final is not None and phys_max is not None:
+            metric_rows.append([abs(float(phys_final)), float(phys_max)])
+            labels.append(physics_label)
+
+    if metric_rows:
+        xs = np.arange(len(labels), dtype=float)
+        width = 0.35
+        final_vals = [row[0] for row in metric_rows]
+        max_vals = [row[1] for row in metric_rows]
+        ax1.bar(xs - width / 2, final_vals, width=width, color="#2ca02c", label="|final drift|")
+        ax1.bar(xs + width / 2, max_vals, width=width, color="#d62728", label="max |drift|")
+        ax1.set_xticks(xs)
+        ax1.set_xticklabels(labels)
+        ax1.set_ylabel("Drift (eV)")
+        ax1.set_title("Per-Rollout Metrics")
+        ax1.legend(loc="best")
+    else:
+        ax1.text(0.5, 0.5, "No valid summary metrics", ha="center", va="center", transform=ax1.transAxes)
+        ax1.set_title("Per-Rollout Metrics")
 
     fig.suptitle(title)
     fig.tight_layout()
