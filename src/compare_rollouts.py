@@ -11,6 +11,7 @@ Typical use:
 """
 
 import argparse
+import csv
 import json
 from statistics import median
 from pathlib import Path
@@ -246,11 +247,18 @@ def main():
 
     per_rollout_dir = output_dir / "per_rollout"
     per_rollout_dir.mkdir(parents=True, exist_ok=True)
+    per_rollout_rows = []
     for idx, (standard_row, candidate_row) in enumerate(
         zip(standard_rollout.get("rollouts", []), candidate_rollout.get("rollouts", []))
     ):
         rollout_dir = per_rollout_dir / f"rollout_{idx:03d}"
         rollout_dir.mkdir(parents=True, exist_ok=True)
+        single_comparison = _build_single_rollout_comparison(
+            standard_row,
+            candidate_row,
+            standard_label=args.standard_label,
+            candidate_label=args.candidate_label,
+        )
         single_summary = {
             "config": {
                 "dataset": args.dataset,
@@ -266,16 +274,34 @@ def main():
             },
             "standard": standard_row,
             "candidate": candidate_row,
-            "comparison": _build_single_rollout_comparison(
-                standard_row,
-                candidate_row,
-                standard_label=args.standard_label,
-                candidate_label=args.candidate_label,
-            ),
+            "comparison": single_comparison,
         }
         with open(rollout_dir / "rollout_comparison.json", "w") as handle:
             json.dump(single_summary, handle, indent=2)
         print(f"Wrote: {rollout_dir / 'rollout_comparison.json'}")
+
+        per_rollout_rows.append(
+            {
+                "rollout_index": idx,
+                "start_idx_standard": single_comparison["start_idx_standard"],
+                "start_idx_candidate": single_comparison["start_idx_candidate"],
+                "matched_start_idx": single_comparison["matched_start_idx"],
+                "standard_failed": single_comparison["standard_failed"],
+                "candidate_failed": single_comparison["candidate_failed"],
+                "standard_final_drift_eV": single_comparison["standard_final_drift_eV"],
+                "candidate_final_drift_eV": single_comparison["candidate_final_drift_eV"],
+                "standard_abs_final_drift_eV": single_comparison["standard_abs_final_drift_eV"],
+                "candidate_abs_final_drift_eV": single_comparison["candidate_abs_final_drift_eV"],
+                "abs_final_drift_delta_eV": single_comparison["abs_final_drift_delta_eV"],
+                "standard_max_abs_drift_eV": single_comparison["standard_max_abs_drift_eV"],
+                "candidate_max_abs_drift_eV": single_comparison["candidate_max_abs_drift_eV"],
+                "max_abs_drift_delta_eV": single_comparison["max_abs_drift_delta_eV"],
+                "better_abs_final_drift": single_comparison["better_abs_final_drift"],
+                "better_max_abs_drift": single_comparison["better_max_abs_drift"],
+                "json_path": str(rollout_dir / "rollout_comparison.json"),
+                "plot_path": str(rollout_dir / "rollout_drift_comparison.png"),
+            }
+        )
 
         plot_single_rollout_drift_comparison(
             standard_row,
@@ -285,6 +311,34 @@ def main():
             standard_label=args.standard_label,
             physics_label=args.candidate_label,
         )
+
+    csv_path = output_dir / "per_rollout_summary.csv"
+    csv_fields = [
+        "rollout_index",
+        "start_idx_standard",
+        "start_idx_candidate",
+        "matched_start_idx",
+        "standard_failed",
+        "candidate_failed",
+        "standard_final_drift_eV",
+        "candidate_final_drift_eV",
+        "standard_abs_final_drift_eV",
+        "candidate_abs_final_drift_eV",
+        "abs_final_drift_delta_eV",
+        "standard_max_abs_drift_eV",
+        "candidate_max_abs_drift_eV",
+        "max_abs_drift_delta_eV",
+        "better_abs_final_drift",
+        "better_max_abs_drift",
+        "json_path",
+        "plot_path",
+    ]
+    with open(csv_path, "w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=csv_fields)
+        writer.writeheader()
+        for row in per_rollout_rows:
+            writer.writerow(row)
+    print(f"Wrote: {csv_path}")
 
     plot_rollout_drift_comparison(
         standard_rollout,
