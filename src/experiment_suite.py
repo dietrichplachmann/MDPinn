@@ -7,6 +7,12 @@ Highlights:
 - Physics model-size sweeps (embedding_dimension / num_layers / num_rbf).
 - Named physics checkpoints: <molecule>_<single|bulk>_<embedding>_<layers>.ckpt
 - Consolidated CSV + Markdown tables for paper-ready summaries.
+
+Operational note:
+- Training and evaluation are now treated as separate phases.
+- `run_compare` and `run_rollout` remain available for explicit experiment
+  automation, but they should be considered opt-in post-processing rather than
+  the default training path.
 """
 
 import argparse
@@ -297,6 +303,7 @@ def _finalize_optuna_experiment(experiment_name, experiment_cfg, exp_dir, study)
             physics_checkpoint=str(best_model_path),
             dataset=dataset,
             molecule=molecule,
+            data_root=rollout_cfg.get("data_root", "./data"),
             output_dir=str(comparison_dir),
             device=device,
         )
@@ -832,6 +839,7 @@ def main():
                     physics_checkpoint=str(phys_ckpt),
                     dataset=dataset,
                     molecule=molecule,
+                    data_root=rollout_cfg.get("data_root", "./data"),
                     output_dir=str(cmp_dir),
                     device=device,
                 )

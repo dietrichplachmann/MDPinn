@@ -314,6 +314,7 @@ def compare_models(
     physics_checkpoint,
     dataset="MD17",
     molecule="aspirin",
+    data_root="./data",
     output_dir="results/comparison",
     device="cuda" if torch.cuda.is_available() else "cpu",
 ):
@@ -333,7 +334,7 @@ def compare_models(
     physics_model = load_checkpoint(physics_checkpoint, device=device)
 
     print("Loading dataset...")
-    _, _, test_data, full_dataset = create_dataset(dataset, molecule)
+    _, _, test_data, full_dataset = create_dataset(dataset, molecule, data_root=data_root)
 
     print("Evaluating test set...")
     standard_results = evaluate_on_dataset(standard_model, test_data, device=device)
@@ -375,6 +376,7 @@ if __name__ == "__main__":
     parser.add_argument("--physics", type=str, required=True)
     parser.add_argument("--dataset", type=str, default="MD17")
     parser.add_argument("--molecule", type=str, default="aspirin")
+    parser.add_argument("--data-root", type=str, default="./data")
     parser.add_argument("--output-dir", type=str, default="results/comparison")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
@@ -384,6 +386,7 @@ if __name__ == "__main__":
         physics_checkpoint=args.physics,
         dataset=args.dataset,
         molecule=args.molecule,
+        data_root=args.data_root,
         output_dir=args.output_dir,
         device=args.device,
     )

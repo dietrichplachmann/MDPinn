@@ -1,6 +1,8 @@
 *.ckpt
 events.*
 hparams.*
+*.pyc
+__pycache__/
 /data/
 /torchmd-physics/
 /src/__pycache__/

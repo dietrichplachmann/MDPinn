@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 """
-Main CLI entry point for training and comparison.
+Main CLI entry point for training only.
 
-This runner now treats delta-learning as the default advanced path:
+This runner is intentionally limited to model production:
 - `train_standard.py` handles supervised training with optional delta labels.
 - `train_physics.py` adds physics regularization on top of that.
+- Post-training analysis belongs in `run_evaluation.py` so checkpoint
+  selection and graph generation can be rerun independently of training.
 
 Physical interpretation:
 - Without `--delta-learning`, the neural network learns the FULL potential
@@ -31,15 +33,14 @@ def get_user_choice():
     print("\nSelect training mode:")
     print("  [1] Standard training")
     print("  [2] Physics-informed training")
-    print("  [3] Train both + compare")
-    print("  [4] Optuna tuning")
-    print("  [5] Exit")
+    print("  [3] Optuna tuning")
+    print("  [4] Exit")
 
     while True:
-        choice = input("\nEnter your choice (1-5): ").strip()
-        if choice in ["1", "2", "3", "4", "5"]:
+        choice = input("\nEnter your choice (1-4): ").strip()
+        if choice in ["1", "2", "3", "4"]:
             return choice
-        print("Invalid choice. Please enter 1, 2, 3, 4, or 5.")
+        print("Invalid choice. Please enter 1, 2, 3, or 4.")
 
 
 def setup_directories():
@@ -53,7 +54,6 @@ def setup_directories():
         "logs/standard",
         "logs/physics_informed",
         "results",
-        "results/plots",
         "results/optuna",
     ]:
         Path(d).mkdir(parents=True, exist_ok=True)
@@ -176,30 +176,6 @@ def run_physics_informed_training(args):
     )
 
 
-def run_comparison(args):
-    """Train both models and then run metric/plot comparison."""
-    print("\n" + "=" * 70)
-    print("TRAIN + COMPARE")
-    print("=" * 70)
-
-    print("\n[1/3] Training standard model...")
-    run_standard_training(args)
-
-    print("\n[2/3] Training physics-informed model...")
-    run_physics_informed_training(args)
-
-    print("\n[3/3] Comparing checkpoints...")
-    from compare_models import compare_models
-
-    compare_models(
-        standard_checkpoint="checkpoints/standard/best_model.ckpt",
-        physics_checkpoint="checkpoints/physics_informed/best_model.ckpt",
-        dataset=args.dataset,
-        molecule=args.molecule,
-        output_dir="results/plots",
-    )
-
-
 def run_optuna_tuning(args):
     """Run the Optuna tuner from a JSON config file."""
     if not args.tuning_config:
@@ -264,7 +240,7 @@ def parse_args():
     parser.add_argument("--num-rbf", type=int, default=64)
     parser.add_argument("--checkpoint-name", type=str, default="best_model")
 
-    parser.add_argument("--mode", type=str, choices=["standard", "physics", "compare", "tune"])
+    parser.add_argument("--mode", type=str, choices=["standard", "physics", "tune"])
     parser.add_argument("--tuning-config", type=str, default=None)
 
     return parser.parse_args()
@@ -281,16 +257,16 @@ def main():
     setup_directories()
 
     if args.mode:
-        choice = {"standard": "1", "physics": "2", "compare": "3", "tune": "4"}[args.mode]
+        choice = {"standard": "1", "physics": "2", "tune": "3"}[args.mode]
     else:
         choice = get_user_choice()
 
     if not args.mode:
-        dependency_ok = check_tuning_dependencies() if choice == "4" else check_dependencies()
+        dependency_ok = check_tuning_dependencies() if choice == "3" else check_dependencies()
         if not dependency_ok:
             sys.exit(1)
 
-    if choice == "5":
+    if choice == "4":
         print("Exiting.")
         sys.exit(0)
 
@@ -306,20 +282,22 @@ def main():
         print(
             f"  baseline=(eps={args.baseline_eps}, sigma={args.baseline_sigma}, cutoff={args.baseline_cutoff})"
         )
-    if choice in ["1", "2", "3"]:
+    if choice in ["1", "2"]:
         print(f"  embedding_dimension={args.embedding_dimension}")
         print(f"  num_layers={args.num_layers}")
         print(f"  num_rbf={args.num_rbf}")
         print(f"  checkpoint_name={args.checkpoint_name}")
-    if choice in ["2", "3"]:
+    if choice == "2":
         print(f"  momentum_weight={args.momentum_weight}")
         print(f"  nve_weight={args.nve_weight}")
         print(f"  nve_freq={args.nve_freq}")
         print(f"  nve_warmup_epochs={args.nve_warmup_epochs}")
         print(f"  nve_ramp_epochs={args.nve_ramp_epochs}")
         print(f"  nve_relative={args.nve_relative}")
-    if choice == "4":
+    if choice == "3":
         print(f"  tuning_config={args.tuning_config}")
+
+    print("  evaluation=run separately via src/run_evaluation.py")
 
     confirm = input("\nProceed with training? (y/n): ").strip().lower()
     if confirm != "y":
@@ -332,8 +310,6 @@ def main():
         elif choice == "2":
             run_physics_informed_training(args)
         elif choice == "3":
-            run_comparison(args)
-        elif choice == "4":
             run_optuna_tuning(args)
         print("\nDone.")
     except Exception as exc:

@@ -4,6 +4,7 @@
     "overwrite_existing": "Set to true on an experiment to delete and recreate that experiment's output folder before running.",
     "runner": "Omit runner or set runner=grid for the existing fixed-grid workflow. Set runner=optuna to let experiment_suite launch an Optuna study for that experiment.",
     "optuna_stages": "Optional two-stage Optuna flow. Stage entries run in order; stage 1 can promote best params into stage 2 fixed_params.",
+    "evaluation_workflow": "Training and evaluation are intentionally separated. Leave run_compare/run_rollout false during training and call src/run_evaluation.py afterward on the checkpoint(s) you want to inspect.",
     "physics_defaults": [
       "momentum regularization is disabled by default for MD17 single-molecule sweeps because the model already encodes most symmetry structure.",
       "nve_loss_mode=total_energy regularizes K+U drift instead of potential-only drift.",
@@ -25,8 +26,8 @@
     "system_type": "single",
     "run_standard": true,
     "run_physics": true,
-    "run_compare": true,
-    "run_rollout": true,
+    "run_compare": false,
+    "run_rollout": false,
     "physics_overrides": {
       "momentum_weight": 0.0,
       "nve_weight": 0.01,
@@ -72,11 +73,11 @@
       "molecule": "aspirin",
       "overwrite_existing": false,
       "epochs": 10,
-      "run_compare": true,
-      "run_rollout": true,
+      "run_compare": false,
+      "run_rollout": false,
       "optuna_post": {
-        "run_compare": true,
-        "run_rollout": true,
+        "run_compare": false,
+        "run_rollout": false,
         "reference_epochs": 10
       },
       "optuna": {

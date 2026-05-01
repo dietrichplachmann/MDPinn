@@ -182,61 +182,74 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
-    args = parse_args()
-
-    output_dir = Path(args.output_dir)
+def run_rollout_comparison(
+    standard_checkpoint,
+    candidate_checkpoint,
+    dataset="MD17",
+    molecule="aspirin",
+    data_root="./data",
+    steps=5000,
+    dt=0.1,
+    n_rollouts=100,
+    energy_log_stride=20,
+    seed=42,
+    device="cuda" if torch.cuda.is_available() else "cpu",
+    output_dir="results/rollout_comparison",
+    standard_label="Standard",
+    candidate_label="Candidate",
+):
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Running standard rollouts...")
     standard_rollout = run_rollout_summary(
-        ckpt_path=args.standard,
-        dataset=args.dataset,
-        molecule=args.molecule,
-        data_root=args.data_root,
-        steps=args.steps,
-        dt=args.dt,
-        n_rollouts=args.n_rollouts,
-        seed=args.seed,
-        device=args.device,
-        energy_log_stride=args.energy_log_stride,
+        ckpt_path=standard_checkpoint,
+        dataset=dataset,
+        molecule=molecule,
+        data_root=data_root,
+        steps=steps,
+        dt=dt,
+        n_rollouts=n_rollouts,
+        seed=seed,
+        device=device,
+        energy_log_stride=energy_log_stride,
     )
 
     print("Running candidate rollouts...")
     candidate_rollout = run_rollout_summary(
-        ckpt_path=args.candidate,
-        dataset=args.dataset,
-        molecule=args.molecule,
-        data_root=args.data_root,
-        steps=args.steps,
-        dt=args.dt,
-        n_rollouts=args.n_rollouts,
-        seed=args.seed,
-        device=args.device,
-        energy_log_stride=args.energy_log_stride,
+        ckpt_path=candidate_checkpoint,
+        dataset=dataset,
+        molecule=molecule,
+        data_root=data_root,
+        steps=steps,
+        dt=dt,
+        n_rollouts=n_rollouts,
+        seed=seed,
+        device=device,
+        energy_log_stride=energy_log_stride,
     )
 
     comparison = {
         "config": {
-            "dataset": args.dataset,
-            "molecule": args.molecule,
-            "data_root": args.data_root,
-            "steps": args.steps,
-            "dt": args.dt,
-            "n_rollouts": args.n_rollouts,
-            "energy_log_stride": args.energy_log_stride,
-            "seed": args.seed,
-            "device": args.device,
-            "standard_checkpoint": args.standard,
-            "candidate_checkpoint": args.candidate,
+            "dataset": dataset,
+            "molecule": molecule,
+            "data_root": data_root,
+            "steps": steps,
+            "dt": dt,
+            "n_rollouts": n_rollouts,
+            "energy_log_stride": energy_log_stride,
+            "seed": seed,
+            "device": device,
+            "standard_checkpoint": standard_checkpoint,
+            "candidate_checkpoint": candidate_checkpoint,
         },
         "standard": standard_rollout,
         "candidate": candidate_rollout,
         "comparison": _build_comparison_summary(
             standard_rollout,
             candidate_rollout,
-            standard_label=args.standard_label,
-            candidate_label=args.candidate_label,
+            standard_label=standard_label,
+            candidate_label=candidate_label,
         ),
     }
 
@@ -256,20 +269,20 @@ def main():
         single_comparison = _build_single_rollout_comparison(
             standard_row,
             candidate_row,
-            standard_label=args.standard_label,
-            candidate_label=args.candidate_label,
+            standard_label=standard_label,
+            candidate_label=candidate_label,
         )
         single_summary = {
             "config": {
-                "dataset": args.dataset,
-                "molecule": args.molecule,
-                "steps": args.steps,
-                "dt": args.dt,
-                "energy_log_stride": args.energy_log_stride,
-                "seed": args.seed,
-                "device": args.device,
-                "standard_checkpoint": args.standard,
-                "candidate_checkpoint": args.candidate,
+                "dataset": dataset,
+                "molecule": molecule,
+                "steps": steps,
+                "dt": dt,
+                "energy_log_stride": energy_log_stride,
+                "seed": seed,
+                "device": device,
+                "standard_checkpoint": standard_checkpoint,
+                "candidate_checkpoint": candidate_checkpoint,
                 "rollout_index": idx,
             },
             "standard": standard_row,
@@ -307,9 +320,9 @@ def main():
             standard_row,
             candidate_row,
             rollout_dir / "rollout_drift_comparison.png",
-            title=f"{args.standard_label} vs {args.candidate_label} Rollout Drift #{idx}",
-            standard_label=args.standard_label,
-            physics_label=args.candidate_label,
+            title=f"{standard_label} vs {candidate_label} Rollout Drift #{idx}",
+            standard_label=standard_label,
+            physics_label=candidate_label,
         )
 
     csv_path = output_dir / "per_rollout_summary.csv"
@@ -344,10 +357,31 @@ def main():
         standard_rollout,
         candidate_rollout,
         output_dir / "rollout_drift_comparison.png",
-        title=f"{args.standard_label} vs {args.candidate_label} Rollout Drift",
+        title=f"{standard_label} vs {candidate_label} Rollout Drift",
     )
 
     print(json.dumps(comparison["comparison"], indent=2))
+    return comparison
+
+
+def main():
+    args = parse_args()
+    run_rollout_comparison(
+        standard_checkpoint=args.standard,
+        candidate_checkpoint=args.candidate,
+        dataset=args.dataset,
+        molecule=args.molecule,
+        data_root=args.data_root,
+        steps=args.steps,
+        dt=args.dt,
+        n_rollouts=args.n_rollouts,
+        energy_log_stride=args.energy_log_stride,
+        seed=args.seed,
+        device=args.device,
+        output_dir=args.output_dir,
+        standard_label=args.standard_label,
+        candidate_label=args.candidate_label,
+    )
 
 
 if __name__ == "__main__":
