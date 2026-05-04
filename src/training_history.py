@@ -60,7 +60,12 @@ class MetricHistoryCallback(pl.Callback):
         epochs = [row["epoch"] for row in self.rows]
         total_keys = [
             key
-            for key in ("train_total_mse_loss", "val_total_mse_loss", "train_total_with_physics")
+            for key in (
+                "train_total_mse_loss",
+                "val_total_mse_loss",
+                "train_total_with_physics",
+                "val_rollout_score",
+            )
             if any(key in row for row in self.rows)
         ]
         component_keys = [
@@ -73,6 +78,19 @@ class MetricHistoryCallback(pl.Callback):
                 "train_loss_momentum",
                 "train_loss_nve",
                 "train_loss_pbc",
+                "train_loss_momentum_weighted",
+                "train_loss_nve_weighted",
+                "train_loss_pbc_weighted",
+                "train_physics_to_supervised_ratio",
+                "train_nve_to_supervised_ratio",
+                "train_momentum_to_supervised_ratio",
+                "val_rollout_median_mean_abs_drift_eV",
+                "val_rollout_median_max_abs_drift_eV",
+                "val_rollout_failure_rate",
+                "val_force_mae",
+                "val_energy_mae",
+                "train_short_rollout_mean_abs_drift_eV",
+                "train_short_rollout_max_abs_drift_eV",
             )
             if any(key in row for row in self.rows)
         ]

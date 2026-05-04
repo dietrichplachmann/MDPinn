@@ -14,6 +14,8 @@ Chemist view:
 
 import json
 from pathlib import Path
+from collections import Counter
+from statistics import median
 
 import torch
 import lightning.pytorch as pl
@@ -38,6 +40,7 @@ from physics_losses import (
     periodic_bc_loss_improved,
     get_atomic_masses,
 )
+from rollout_nve import FORCE_TO_ACCEL, kinetic_energy
 from training_history import MetricHistoryCallback
 
 
@@ -123,6 +126,19 @@ class PhysicsInformedLNNP(DeltaLNNP):
         self.trajectory_dataset = None
         self.trajectory_start_indices = []
         self.train_batch_counter = 0
+        self.validation_dataset = None
+        self.validation_eval_indices = []
+        self.validation_rollout_start_indices = []
+        self.validation_rollout_steps = int(hparams.get("val_rollout_steps", 250))
+        self.validation_rollout_count = int(hparams.get("val_rollout_count", 6))
+        self.validation_rollout_energy_log_stride = int(hparams.get("val_rollout_energy_log_stride", 10))
+        self.validation_rollout_failure_penalty = float(hparams.get("val_rollout_failure_penalty", 50.0))
+        self.validation_rollout_max_score = float(hparams.get("val_rollout_max_score", 1e6))
+        self.train_rollout_probe_start_indices = []
+        self.train_rollout_probe_steps = int(hparams.get("train_rollout_probe_steps", 100))
+        self.train_rollout_probe_count = int(hparams.get("train_rollout_probe_count", 3))
+        self.train_rollout_probe_energy_log_stride = int(hparams.get("train_rollout_probe_energy_log_stride", 10))
+        self.rollout_probe_dataset = None
 
     def _effective_nve_weight(self):
         """Return epoch-scheduled NVE weight (warmup + linear ramp)."""
@@ -167,6 +183,33 @@ class PhysicsInformedLNNP(DeltaLNNP):
         )
         return out.squeeze(-1) + u_ref
 
+    def _predict_absolute_energy_forces(self, z, pos, batch):
+        """Return absolute energy and forces for the current live model."""
+        pos_req = pos.detach().clone().requires_grad_(True)
+        with torch.enable_grad():
+            out = self(z, pos_req, batch=batch)
+
+        if isinstance(out, tuple) and len(out) >= 2:
+            energy_pred, force_pred = out[0], out[1]
+        else:
+            raise RuntimeError("PhysicsInformedLNNP forward did not return force predictions.")
+
+        if self.delta_learning:
+            u_ref, f_ref = reference_energy_forces_batched(
+                z=z,
+                pos=pos_req,
+                batch=batch,
+                molecule=self.baseline_molecule,
+                epsilon_eV=self.baseline_eps,
+                sigma_A=self.baseline_sigma,
+                r_cut_A=self.baseline_cutoff,
+                energy_offset_eV=self.baseline_energy_offset,
+            )
+            energy_pred = energy_pred.squeeze(-1) + u_ref
+            force_pred = force_pred + f_ref
+
+        return energy_pred.squeeze().detach(), force_pred.detach()
+
     def step(self, batch, loss_fn_list, stage):
         """Compute default LNNP loss, then add physics terms during train stage."""
         total_loss = super().step(batch, loss_fn_list, stage)
@@ -175,6 +218,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
             return total_loss
 
         try:
+            supervised_loss = total_loss
             # Recompute model force prediction for physics penalties.
             # We need force vectors explicitly because momentum symmetry is a
             # force-level constraint.
@@ -229,16 +273,26 @@ class PhysicsInformedLNNP(DeltaLNNP):
 
             self.train_batch_counter += 1
 
+            weighted_momentum = self.momentum_weight * loss_momentum
+            weighted_nve = effective_nve_weight * loss_nve
+            weighted_pbc = self.pbc_weight * loss_pbc
+
             self.log("train_loss_momentum", loss_momentum, on_step=False, on_epoch=True)
             self.log("train_loss_nve", loss_nve, on_step=False, on_epoch=True)
             self.log("train_loss_pbc", loss_pbc, on_step=False, on_epoch=True)
+            self.log("train_loss_momentum_raw", loss_momentum, on_step=False, on_epoch=True)
+            self.log("train_loss_nve_raw", loss_nve, on_step=False, on_epoch=True)
+            self.log("train_loss_pbc_raw", loss_pbc, on_step=False, on_epoch=True)
+            self.log("train_loss_momentum_weighted", weighted_momentum, on_step=False, on_epoch=True)
+            self.log("train_loss_nve_weighted", weighted_nve, on_step=False, on_epoch=True)
+            self.log("train_loss_pbc_weighted", weighted_pbc, on_step=False, on_epoch=True)
             self.log("train_nve_weight_effective", effective_nve_weight, on_step=False, on_epoch=True)
 
-            physics_loss = (
-                self.momentum_weight * loss_momentum
-                + effective_nve_weight * loss_nve
-                + self.pbc_weight * loss_pbc
-            )
+            physics_loss = weighted_momentum + weighted_nve + weighted_pbc
+            denom = torch.abs(supervised_loss.detach()) + 1e-12
+            self.log("train_physics_to_supervised_ratio", physics_loss.detach() / denom, on_step=False, on_epoch=True)
+            self.log("train_nve_to_supervised_ratio", weighted_nve.detach() / denom, on_step=False, on_epoch=True)
+            self.log("train_momentum_to_supervised_ratio", weighted_momentum.detach() / denom, on_step=False, on_epoch=True)
             total_loss = total_loss + physics_loss
             self.log("train_total_with_physics", total_loss, on_step=False, on_epoch=True, prog_bar=True)
 
@@ -246,6 +300,193 @@ class PhysicsInformedLNNP(DeltaLNNP):
             print(f"Warning: physics loss computation failed: {exc}")
 
         return total_loss
+
+    def _run_model_rollout(self, dataset, start_idx, steps, dt_fs, energy_log_stride):
+        s0 = dataset[start_idx]
+        s1 = dataset[start_idx + 1]
+
+        z = s0.z.to(self.device)
+        x = s0.pos.to(self.device).float().clone()
+        x1 = s1.pos.to(self.device).float()
+        masses = get_atomic_masses(z).to(self.device)
+        v = ((x1 - x) / dt_fs).clone()
+
+        batch = torch.zeros(z.shape[0], dtype=torch.long, device=self.device)
+        U0, F0 = self._predict_absolute_energy_forces(z, x, batch)
+        a = (F0 * FORCE_TO_ACCEL) / masses.view(-1, 1)
+        E0 = kinetic_energy(masses, v) + U0
+
+        series = {"step": [], "drift": []}
+        failed = False
+        fail_reason = None
+
+        for step in range(1, steps + 1):
+            v_half = v + 0.5 * dt_fs * a
+            x = x + dt_fs * v_half
+
+            if torch.isnan(x).any() or torch.isinf(x).any() or x.abs().max().item() > 1e4:
+                failed = True
+                fail_reason = "position_numerical_blowup"
+                break
+
+            U, F = self._predict_absolute_energy_forces(z, x, batch)
+            a_new = (F * FORCE_TO_ACCEL) / masses.view(-1, 1)
+            v = v_half + 0.5 * dt_fs * a_new
+            a = a_new
+
+            if step % energy_log_stride == 0 or step == steps:
+                K = kinetic_energy(masses, v)
+                E = K + U
+                drift = E - E0
+                series["step"].append(step)
+                series["drift"].append(float(drift.item()))
+                if torch.isnan(E) or torch.isinf(E):
+                    failed = True
+                    fail_reason = "energy_numerical_blowup"
+                    break
+
+        return {
+            "failed": failed,
+            "fail_reason": fail_reason,
+            "series": series,
+            "final_drift": series["drift"][-1] if series["drift"] else None,
+            "max_abs_drift": max((abs(d) for d in series["drift"]), default=None),
+        }
+
+    @staticmethod
+    def _median_or_none(values):
+        return None if not values else float(median(values))
+
+    def _evaluate_rollout_group(self, dataset, start_indices, count, steps, energy_log_stride):
+        if dataset is None or not start_indices or count <= 0:
+            return None
+
+        chosen = start_indices[:count]
+        fail_reasons = Counter()
+        mean_abs_drifts = []
+        max_abs_drifts = []
+        final_abs_drifts = []
+
+        for start_idx in chosen:
+            rollout = self._run_model_rollout(
+                dataset=dataset,
+                start_idx=int(start_idx),
+                steps=steps,
+                dt_fs=self.nve_dt_fs,
+                energy_log_stride=energy_log_stride,
+            )
+            if rollout["failed"]:
+                fail_reasons[rollout["fail_reason"] or "unknown"] += 1
+                continue
+
+            drifts = rollout["series"].get("drift", [])
+            if not drifts:
+                continue
+            mean_abs_drifts.append(float(sum(abs(d) for d in drifts) / len(drifts)))
+            max_abs_drifts.append(float(rollout["max_abs_drift"]))
+            final_abs_drifts.append(float(abs(rollout["final_drift"])))
+
+        failure_rate = float((len(chosen) - len(mean_abs_drifts)) / len(chosen))
+        if mean_abs_drifts:
+            score = (
+                self._median_or_none(mean_abs_drifts)
+                + 0.5 * self._median_or_none(max_abs_drifts)
+                + self.validation_rollout_failure_penalty * failure_rate
+            )
+        else:
+            score = self.validation_rollout_max_score
+
+        return {
+            "count": len(chosen),
+            "failure_rate": failure_rate,
+            "median_mean_abs_drift_eV": self._median_or_none(mean_abs_drifts),
+            "median_max_abs_drift_eV": self._median_or_none(max_abs_drifts),
+            "median_abs_final_drift_eV": self._median_or_none(final_abs_drifts),
+            "fail_reasons": dict(fail_reasons),
+            "score": float(score),
+        }
+
+    def _evaluate_static_guardrails(self):
+        if self.validation_dataset is None or not self.validation_eval_indices:
+            return None
+
+        energy_abs_err = []
+        energy_sq_err = []
+        force_abs_err = []
+        force_sq_err = []
+        force_count = 0
+
+        for idx in self.validation_eval_indices:
+            sample = self.validation_dataset[int(idx)].to(self.device)
+            batch = torch.zeros(sample.z.shape[0], dtype=torch.long, device=self.device)
+            energy_pred, force_pred = self._predict_absolute_energy_forces(sample.z, sample.pos.float(), batch)
+            energy_true = sample.y.squeeze()
+            force_true = sample.neg_dy
+
+            e_diff = float((energy_pred - energy_true).item())
+            energy_abs_err.append(abs(e_diff))
+            energy_sq_err.append(e_diff * e_diff)
+
+            f_diff = (force_pred - force_true).reshape(-1)
+            force_abs_err.append(float(torch.abs(f_diff).sum().item()))
+            force_sq_err.append(float((f_diff * f_diff).sum().item()))
+            force_count += int(f_diff.numel())
+
+        return {
+            "energy_mae": float(sum(energy_abs_err) / len(energy_abs_err)),
+            "energy_rmse": float((sum(energy_sq_err) / len(energy_sq_err)) ** 0.5),
+            "force_mae": float(sum(force_abs_err) / force_count),
+            "force_rmse": float((sum(force_sq_err) / force_count) ** 0.5),
+        }
+
+    def on_validation_epoch_end(self):
+        if self.trainer is None or self.trainer.sanity_checking:
+            return
+
+        try:
+            static_metrics = self._evaluate_static_guardrails()
+            if static_metrics is not None:
+                self.log("val_energy_mae", static_metrics["energy_mae"], on_step=False, on_epoch=True)
+                self.log("val_energy_rmse", static_metrics["energy_rmse"], on_step=False, on_epoch=True)
+                self.log("val_force_mae", static_metrics["force_mae"], on_step=False, on_epoch=True)
+                self.log("val_force_rmse", static_metrics["force_rmse"], on_step=False, on_epoch=True)
+
+            rollout_metrics = self._evaluate_rollout_group(
+                dataset=self.validation_dataset,
+                start_indices=self.validation_rollout_start_indices,
+                count=self.validation_rollout_count,
+                steps=self.validation_rollout_steps,
+                energy_log_stride=self.validation_rollout_energy_log_stride,
+            )
+            if rollout_metrics is not None:
+                self.log("val_rollout_median_mean_abs_drift_eV", rollout_metrics["median_mean_abs_drift_eV"], on_step=False, on_epoch=True)
+                self.log("val_rollout_median_max_abs_drift_eV", rollout_metrics["median_max_abs_drift_eV"], on_step=False, on_epoch=True)
+                self.log("val_rollout_median_abs_final_drift_eV", rollout_metrics["median_abs_final_drift_eV"], on_step=False, on_epoch=True)
+                self.log("val_rollout_failure_rate", rollout_metrics["failure_rate"], on_step=False, on_epoch=True, prog_bar=True)
+                self.log("val_rollout_score", rollout_metrics["score"], on_step=False, on_epoch=True, prog_bar=True)
+                self.log("val_rollout_fail_position_numerical_blowup_count", float(rollout_metrics["fail_reasons"].get("position_numerical_blowup", 0)), on_step=False, on_epoch=True)
+                self.log("val_rollout_fail_energy_numerical_blowup_count", float(rollout_metrics["fail_reasons"].get("energy_numerical_blowup", 0)), on_step=False, on_epoch=True)
+        except Exception as exc:
+            print(f"Warning: rollout-aware validation metrics failed: {exc}")
+
+    def on_train_epoch_end(self):
+        if self.trainer is None or self.trainer.sanity_checking:
+            return
+
+        try:
+            probe_metrics = self._evaluate_rollout_group(
+                dataset=self.rollout_probe_dataset,
+                start_indices=self.train_rollout_probe_start_indices,
+                count=self.train_rollout_probe_count,
+                steps=self.train_rollout_probe_steps,
+                energy_log_stride=self.train_rollout_probe_energy_log_stride,
+            )
+            if probe_metrics is not None:
+                self.log("train_short_rollout_mean_abs_drift_eV", probe_metrics["median_mean_abs_drift_eV"], on_step=False, on_epoch=True)
+                self.log("train_short_rollout_max_abs_drift_eV", probe_metrics["median_max_abs_drift_eV"], on_step=False, on_epoch=True)
+                self.log("train_short_rollout_failure_rate", probe_metrics["failure_rate"], on_step=False, on_epoch=True)
+        except Exception as exc:
+            print(f"Warning: short-rollout probe metrics failed: {exc}")
 
     def _compute_nve_loss(self, batch_idx):
         """Compute trajectory drift penalty on absolute energy.
@@ -344,6 +585,30 @@ def _contiguous_train_starts(train_subset, traj_length):
     return starts
 
 
+def _contiguous_subset_starts(subset, required_span=2):
+    """Return starts whose next `required_span-1` frames stay inside the subset."""
+    if not hasattr(subset, "indices"):
+        return []
+
+    subset_indices = sorted(int(idx) for idx in subset.indices)
+    subset_index_set = set(subset_indices)
+    starts = []
+    for start_idx in subset_indices:
+        end_idx = start_idx + required_span
+        if all(frame_idx in subset_index_set for frame_idx in range(start_idx, end_idx)):
+            starts.append(start_idx)
+    return starts
+
+
+def _evenly_sample_indices(indices, max_count):
+    if not indices or max_count <= 0:
+        return []
+    if len(indices) <= max_count:
+        return [int(idx) for idx in indices]
+    stride = max(1, len(indices) // max_count)
+    return [int(idx) for idx in indices[::stride][:max_count]]
+
+
 def train_physics_informed_model(
     dataset="MD17",
     molecule="aspirin",
@@ -384,6 +649,15 @@ def train_physics_informed_model(
     seed=42,
     trainer_callbacks=None,
     trainer_kwargs=None,
+    val_rollout_steps=250,
+    val_rollout_count=6,
+    val_rollout_energy_log_stride=10,
+    val_rollout_failure_penalty=50.0,
+    val_rollout_max_score=1e6,
+    val_static_eval_count=128,
+    train_rollout_probe_steps=100,
+    train_rollout_probe_count=3,
+    train_rollout_probe_energy_log_stride=10,
 ):
     """Train physics-informed model with optional delta-learning targets.
 
@@ -478,6 +752,14 @@ def train_physics_informed_model(
         "nve_relative_eps": float(nve_relative_eps),
         "nve_loss_mode": str(nve_loss_mode),
         "nve_dt_fs": float(nve_dt_fs),
+        "val_rollout_steps": int(val_rollout_steps),
+        "val_rollout_count": int(val_rollout_count),
+        "val_rollout_energy_log_stride": int(val_rollout_energy_log_stride),
+        "val_rollout_failure_penalty": float(val_rollout_failure_penalty),
+        "val_rollout_max_score": float(val_rollout_max_score),
+        "train_rollout_probe_steps": int(train_rollout_probe_steps),
+        "train_rollout_probe_count": int(train_rollout_probe_count),
+        "train_rollout_probe_energy_log_stride": int(train_rollout_probe_energy_log_stride),
         "atom_filter": -1,
         "reduce_op": "add",
         "equivariance_invariance_group": "O(3)",
@@ -496,16 +778,21 @@ def train_physics_informed_model(
     model = PhysicsInformedLNNP(model_args)
     model.trajectory_dataset = full_dataset
     model.trajectory_start_indices = _contiguous_train_starts(train_data, traj_length)
+    model.validation_dataset = full_dataset
+    model.validation_eval_indices = _evenly_sample_indices(sorted(int(idx) for idx in val_data.indices), val_static_eval_count)
+    model.validation_rollout_start_indices = _evenly_sample_indices(_contiguous_subset_starts(val_data, required_span=2), val_rollout_count)
+    model.rollout_probe_dataset = full_dataset
+    model.train_rollout_probe_start_indices = _evenly_sample_indices(_contiguous_subset_starts(train_data, required_span=2), train_rollout_probe_count)
 
     checkpoint_callback = ModelCheckpoint(
-        monitor="val_total_mse_loss",
+        monitor="val_rollout_score",
         dirpath=save_dir,
         filename=checkpoint_name,
         save_top_k=1,
         mode="min",
         save_last=True,
     )
-    early_stop = EarlyStopping(monitor="val_total_mse_loss", patience=30, mode="min")
+    early_stop = EarlyStopping(monitor="val_rollout_score", patience=30, mode="min")
     history_callback = MetricHistoryCallback(save_dir, checkpoint_name)
     logger = TensorBoardLogger(save_dir=log_dir, name="physics_informed")
     trainer_callbacks = list(trainer_callbacks or [])
@@ -538,7 +825,7 @@ def train_physics_informed_model(
     val_metrics = dict(fit_metrics)
     val_metrics.update({f"post_test.{key}": value for key, value in test_callback_metrics.items()})
     if best_model_score is not None:
-        val_metrics.setdefault("val_total_mse_loss", best_model_score)
+        val_metrics.setdefault("val_rollout_score", best_model_score)
 
     config = {
         "model_args": model_args,
@@ -577,6 +864,18 @@ def train_physics_informed_model(
             "nve_loss_mode": str(nve_loss_mode),
             "nve_dt_fs": float(nve_dt_fs),
         },
+        "rollout_validation": {
+            "monitor_metric": "val_rollout_score",
+            "val_rollout_steps": int(val_rollout_steps),
+            "val_rollout_count": int(val_rollout_count),
+            "val_rollout_energy_log_stride": int(val_rollout_energy_log_stride),
+            "val_rollout_failure_penalty": float(val_rollout_failure_penalty),
+            "val_rollout_max_score": float(val_rollout_max_score),
+            "val_static_eval_count": int(val_static_eval_count),
+            "train_rollout_probe_steps": int(train_rollout_probe_steps),
+            "train_rollout_probe_count": int(train_rollout_probe_count),
+            "train_rollout_probe_energy_log_stride": int(train_rollout_probe_energy_log_stride),
+        },
     }
 
     with open(Path(save_dir) / "config.json", "w") as f:
@@ -614,6 +913,15 @@ if __name__ == "__main__":
     parser.add_argument("--nve-relative-eps", type=float, default=1e-6)
     parser.add_argument("--nve-loss-mode", type=str, default="total_energy")
     parser.add_argument("--nve-dt-fs", type=float, default=0.5)
+    parser.add_argument("--val-rollout-steps", type=int, default=250)
+    parser.add_argument("--val-rollout-count", type=int, default=6)
+    parser.add_argument("--val-rollout-energy-log-stride", type=int, default=10)
+    parser.add_argument("--val-rollout-failure-penalty", type=float, default=50.0)
+    parser.add_argument("--val-rollout-max-score", type=float, default=1e6)
+    parser.add_argument("--val-static-eval-count", type=int, default=128)
+    parser.add_argument("--train-rollout-probe-steps", type=int, default=100)
+    parser.add_argument("--train-rollout-probe-count", type=int, default=3)
+    parser.add_argument("--train-rollout-probe-energy-log-stride", type=int, default=10)
     parser.add_argument("--delta-learning", action="store_true")
     parser.add_argument("--baseline-eps", type=float, default=0.01)
     parser.add_argument("--baseline-sigma", type=float, default=1.0)
@@ -639,6 +947,15 @@ if __name__ == "__main__":
         nve_relative_eps=args.nve_relative_eps,
         nve_loss_mode=args.nve_loss_mode,
         nve_dt_fs=args.nve_dt_fs,
+        val_rollout_steps=args.val_rollout_steps,
+        val_rollout_count=args.val_rollout_count,
+        val_rollout_energy_log_stride=args.val_rollout_energy_log_stride,
+        val_rollout_failure_penalty=args.val_rollout_failure_penalty,
+        val_rollout_max_score=args.val_rollout_max_score,
+        val_static_eval_count=args.val_static_eval_count,
+        train_rollout_probe_steps=args.train_rollout_probe_steps,
+        train_rollout_probe_count=args.train_rollout_probe_count,
+        train_rollout_probe_energy_log_stride=args.train_rollout_probe_energy_log_stride,
         delta_learning=args.delta_learning,
         baseline_epsilon_eV=args.baseline_eps,
         baseline_sigma_A=args.baseline_sigma,

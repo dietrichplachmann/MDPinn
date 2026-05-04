@@ -165,6 +165,14 @@ def run_physics_informed_training(args):
         nve_ramp_epochs=args.nve_ramp_epochs,
         nve_relative=args.nve_relative,
         nve_relative_eps=args.nve_relative_eps,
+        val_rollout_steps=args.val_rollout_steps,
+        val_rollout_count=args.val_rollout_count,
+        val_rollout_energy_log_stride=args.val_rollout_energy_log_stride,
+        val_rollout_failure_penalty=args.val_rollout_failure_penalty,
+        val_static_eval_count=args.val_static_eval_count,
+        train_rollout_probe_steps=args.train_rollout_probe_steps,
+        train_rollout_probe_count=args.train_rollout_probe_count,
+        train_rollout_probe_energy_log_stride=args.train_rollout_probe_energy_log_stride,
         delta_learning=args.delta_learning,
         baseline_epsilon_eV=args.baseline_eps,
         baseline_sigma_A=args.baseline_sigma,
@@ -235,6 +243,14 @@ def parse_args():
     parser.add_argument("--nve-absolute", dest="nve_relative", action="store_false")
     parser.set_defaults(nve_relative=True)
     parser.add_argument("--nve-relative-eps", type=float, default=1e-6)
+    parser.add_argument("--val-rollout-steps", type=int, default=250)
+    parser.add_argument("--val-rollout-count", type=int, default=6)
+    parser.add_argument("--val-rollout-energy-log-stride", type=int, default=10)
+    parser.add_argument("--val-rollout-failure-penalty", type=float, default=50.0)
+    parser.add_argument("--val-static-eval-count", type=int, default=128)
+    parser.add_argument("--train-rollout-probe-steps", type=int, default=100)
+    parser.add_argument("--train-rollout-probe-count", type=int, default=3)
+    parser.add_argument("--train-rollout-probe-energy-log-stride", type=int, default=10)
     parser.add_argument("--embedding-dimension", type=int, default=256)
     parser.add_argument("--num-layers", type=int, default=6)
     parser.add_argument("--num-rbf", type=int, default=64)
@@ -294,6 +310,8 @@ def main():
         print(f"  nve_warmup_epochs={args.nve_warmup_epochs}")
         print(f"  nve_ramp_epochs={args.nve_ramp_epochs}")
         print(f"  nve_relative={args.nve_relative}")
+        print(f"  val_rollout_steps={args.val_rollout_steps}")
+        print(f"  val_rollout_count={args.val_rollout_count}")
     if choice == "3":
         print(f"  tuning_config={args.tuning_config}")
 
