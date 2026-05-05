@@ -165,10 +165,15 @@ def run_physics_informed_training(args):
         nve_ramp_epochs=args.nve_ramp_epochs,
         nve_relative=args.nve_relative,
         nve_relative_eps=args.nve_relative_eps,
+        nve_drift_scale_eV=args.nve_drift_scale_ev,
+        nve_per_atom=args.nve_per_atom,
+        nve_loss_mode=args.nve_loss_mode,
+        nve_dt_fs=args.nve_dt_fs,
         val_rollout_steps=args.val_rollout_steps,
         val_rollout_count=args.val_rollout_count,
         val_rollout_energy_log_stride=args.val_rollout_energy_log_stride,
         val_rollout_failure_penalty=args.val_rollout_failure_penalty,
+        val_rollout_max_score=args.val_rollout_max_score,
         val_static_eval_count=args.val_static_eval_count,
         train_rollout_probe_steps=args.train_rollout_probe_steps,
         train_rollout_probe_count=args.train_rollout_probe_count,
@@ -241,12 +246,19 @@ def parse_args():
     parser.add_argument("--nve-ramp-epochs", type=int, default=20)
     parser.add_argument("--nve-relative", dest="nve_relative", action="store_true")
     parser.add_argument("--nve-absolute", dest="nve_relative", action="store_false")
-    parser.set_defaults(nve_relative=True)
+    parser.set_defaults(nve_relative=False)
     parser.add_argument("--nve-relative-eps", type=float, default=1e-6)
+    parser.add_argument("--nve-drift-scale-ev", type=float, default=0.1)
+    parser.add_argument("--nve-per-atom", dest="nve_per_atom", action="store_true")
+    parser.add_argument("--nve-total-drift", dest="nve_per_atom", action="store_false")
+    parser.set_defaults(nve_per_atom=True)
+    parser.add_argument("--nve-loss-mode", type=str, default="total_energy", choices=["total_energy", "potential_only"])
+    parser.add_argument("--nve-dt-fs", type=float, default=0.5)
     parser.add_argument("--val-rollout-steps", type=int, default=250)
     parser.add_argument("--val-rollout-count", type=int, default=6)
     parser.add_argument("--val-rollout-energy-log-stride", type=int, default=10)
     parser.add_argument("--val-rollout-failure-penalty", type=float, default=50.0)
+    parser.add_argument("--val-rollout-max-score", type=float, default=1e6)
     parser.add_argument("--val-static-eval-count", type=int, default=128)
     parser.add_argument("--train-rollout-probe-steps", type=int, default=100)
     parser.add_argument("--train-rollout-probe-count", type=int, default=3)
@@ -310,6 +322,10 @@ def main():
         print(f"  nve_warmup_epochs={args.nve_warmup_epochs}")
         print(f"  nve_ramp_epochs={args.nve_ramp_epochs}")
         print(f"  nve_relative={args.nve_relative}")
+        print(f"  nve_drift_scale_eV={args.nve_drift_scale_ev}")
+        print(f"  nve_per_atom={args.nve_per_atom}")
+        print(f"  nve_loss_mode={args.nve_loss_mode}")
+        print(f"  nve_dt_fs={args.nve_dt_fs}")
         print(f"  val_rollout_steps={args.val_rollout_steps}")
         print(f"  val_rollout_count={args.val_rollout_count}")
     if choice == "3":

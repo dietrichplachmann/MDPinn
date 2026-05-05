@@ -13,6 +13,48 @@ import torch
 import torch.nn.functional as F
 
 
+def _nve_loss_from_drift(
+    drift,
+    e0,
+    n_atoms,
+    relative=False,
+    eps=1e-6,
+    drift_scale_eV=None,
+    per_atom=True,
+    return_stats=False,
+):
+    """Convert raw total-energy drift into a scaled NVE penalty.
+
+    The old relative mode divides by |E0|, which can hide drift when absolute
+    energies include a large arbitrary offset. The default path instead works
+    with drift per atom and an explicit eV scale.
+    """
+    raw_drift = drift
+    penalty_drift = raw_drift
+
+    if relative:
+        penalty_drift = penalty_drift / (torch.abs(e0.detach()) + eps)
+    else:
+        if per_atom:
+            penalty_drift = penalty_drift / max(int(n_atoms), 1)
+        if drift_scale_eV is not None and float(drift_scale_eV) > 0:
+            scale = torch.as_tensor(float(drift_scale_eV), device=drift.device, dtype=drift.dtype)
+            penalty_drift = penalty_drift / scale
+
+    loss = torch.mean(penalty_drift ** 2)
+    if not return_stats:
+        return loss
+
+    abs_drift = torch.abs(raw_drift.detach())
+    stats = {
+        "mean_abs_drift_eV": torch.mean(abs_drift),
+        "max_abs_drift_eV": torch.max(abs_drift),
+        "mean_abs_drift_per_atom_eV": torch.mean(abs_drift) / max(int(n_atoms), 1),
+        "max_abs_drift_per_atom_eV": torch.max(abs_drift) / max(int(n_atoms), 1),
+    }
+    return loss, stats
+
+
 # ============================================================================
 # MOMENTUM CONSERVATION LOSS (Works with any batch)
 # ============================================================================
@@ -100,7 +142,17 @@ def build_trajectory_batch(dataset, start_idx, traj_length, device):
     }
 
 
-def nve_loss_from_trajectory(model, traj_batch, device, dt=0.5, relative=True, eps=1e-6):
+def nve_loss_from_trajectory(
+    model,
+    traj_batch,
+    device,
+    dt=0.5,
+    relative=False,
+    eps=1e-6,
+    drift_scale_eV=None,
+    per_atom=True,
+    return_stats=False,
+):
     """
     NVE (energy conservation) loss for trajectory data
 
@@ -128,6 +180,8 @@ def nve_loss_from_trajectory(model, traj_batch, device, dt=0.5, relative=True, e
     Z = traj_batch['Z']  # (N,)
 
     T, N, _ = R_traj.shape
+    if T < 2:
+        raise ValueError("NVE loss requires at least two trajectory frames.")
 
     # Create batch tensor (all atoms belong to same molecule)
     batch = torch.zeros(N, dtype=torch.long, device=device)
@@ -148,23 +202,34 @@ def nve_loss_from_trajectory(model, traj_batch, device, dt=0.5, relative=True, e
 
     E_pred_traj = torch.stack(E_pred_list)  # (T,)
 
-    # Penalize energy drift from initial value.
-    # In NVE ensemble, E(t) should equal E(0) for all t.
-    # Relative mode makes the term scale-invariant across trajectories with
-    # different absolute energy offsets.
-    E0 = E_pred_traj[0].detach()  # Detach to only penalize drift, not absolute value
+    # Penalize energy drift from initial value. Detach E0 so the term only
+    # penalizes drift, not the absolute energy offset.
+    E0 = E_pred_traj[0].detach()
     drift = E_pred_traj - E0
-    if relative:
-        drift = drift / (torch.abs(E0) + eps)
-    L_drift = torch.mean(drift ** 2)
+    return _nve_loss_from_drift(
+        drift,
+        E0,
+        N,
+        relative=relative,
+        eps=eps,
+        drift_scale_eV=drift_scale_eV,
+        per_atom=per_atom,
+        return_stats=return_stats,
+    )
 
-    # REMOVED: Reference energy term - it was too large and counterproductive
-    # The drift loss alone is sufficient for energy conservation
 
-    return L_drift
-
-
-def nve_loss_with_kinetic_energy(model, traj_batch, device, masses, dt=0.5, relative=False, eps=1e-6):
+def nve_loss_with_kinetic_energy(
+    model,
+    traj_batch,
+    device,
+    masses,
+    dt=0.5,
+    relative=False,
+    eps=1e-6,
+    drift_scale_eV=None,
+    per_atom=True,
+    return_stats=False,
+):
     """
     Full NVE loss including kinetic energy:
         E_total = K + U_pred
@@ -190,6 +255,8 @@ def nve_loss_with_kinetic_energy(model, traj_batch, device, masses, dt=0.5, rela
     masses = masses.to(device)  # (N,)
 
     T, N, _ = R_traj.shape
+    if T < 2:
+        raise ValueError("NVE loss requires at least two trajectory frames.")
 
     # Compute velocities from positions using central differences
     V_traj = compute_velocities_from_positions(R_traj, dt)  # (T, N, 3)
@@ -222,11 +289,16 @@ def nve_loss_with_kinetic_energy(model, traj_batch, device, masses, dt=0.5, rela
     # Penalize drift from initial total energy
     E0 = E_total_traj[0].detach()
     drift = E_total_traj - E0
-    if relative:
-        drift = drift / (torch.abs(E0) + eps)
-    L_NVE = torch.mean(drift ** 2)
-
-    return L_NVE
+    return _nve_loss_from_drift(
+        drift,
+        E0,
+        N,
+        relative=relative,
+        eps=eps,
+        drift_scale_eV=drift_scale_eV,
+        per_atom=per_atom,
+        return_stats=return_stats,
+    )
 
 
 def compute_velocities_from_positions(R_traj, dt=0.5):

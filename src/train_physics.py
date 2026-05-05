@@ -115,13 +115,16 @@ class PhysicsInformedLNNP(DeltaLNNP):
         self.nve_freq = int(hparams.get("nve_freq", 50))
         self.nve_warmup_epochs = int(hparams.get("nve_warmup_epochs", 5))
         self.nve_ramp_epochs = int(hparams.get("nve_ramp_epochs", 20))
-        self.nve_relative = bool(hparams.get("nve_relative", True))
+        self.nve_relative = bool(hparams.get("nve_relative", False))
         self.nve_relative_eps = float(hparams.get("nve_relative_eps", 1e-6))
+        self.nve_drift_scale_eV = float(hparams.get("nve_drift_scale_eV", 0.1))
+        self.nve_per_atom = bool(hparams.get("nve_per_atom", True))
         # `total_energy` is the recommended default for MD because it constrains
         # the physically relevant Hamiltonian drift rather than potential-only drift.
         self.nve_loss_mode = str(hparams.get("nve_loss_mode", "total_energy"))
         # Keep the training-side trajectory timestep aligned with rollout/eval.
         self.nve_dt_fs = float(hparams.get("nve_dt_fs", 0.5))
+        self._last_nve_diagnostics = {}
 
         self.trajectory_dataset = None
         self.trajectory_start_indices = []
@@ -131,13 +134,13 @@ class PhysicsInformedLNNP(DeltaLNNP):
         self.validation_rollout_start_indices = []
         self.validation_rollout_steps = int(hparams.get("val_rollout_steps", 250))
         self.validation_rollout_count = int(hparams.get("val_rollout_count", 6))
-        self.validation_rollout_energy_log_stride = int(hparams.get("val_rollout_energy_log_stride", 10))
+        self.validation_rollout_energy_log_stride = max(1, int(hparams.get("val_rollout_energy_log_stride", 10)))
         self.validation_rollout_failure_penalty = float(hparams.get("val_rollout_failure_penalty", 50.0))
         self.validation_rollout_max_score = float(hparams.get("val_rollout_max_score", 1e6))
         self.train_rollout_probe_start_indices = []
         self.train_rollout_probe_steps = int(hparams.get("train_rollout_probe_steps", 100))
         self.train_rollout_probe_count = int(hparams.get("train_rollout_probe_count", 3))
-        self.train_rollout_probe_energy_log_stride = int(hparams.get("train_rollout_probe_energy_log_stride", 10))
+        self.train_rollout_probe_energy_log_stride = max(1, int(hparams.get("train_rollout_probe_energy_log_stride", 10)))
         self.rollout_probe_dataset = None
 
     def _effective_nve_weight(self):
@@ -210,6 +213,24 @@ class PhysicsInformedLNNP(DeltaLNNP):
 
         return energy_pred.squeeze().detach(), force_pred.detach()
 
+    def _absolute_force_from_prediction(self, z, pos, batch, force_pred, box=None):
+        """Convert a residual force prediction into the deployed hybrid force."""
+        if not self.delta_learning:
+            return force_pred
+
+        _, f_ref = reference_energy_forces_batched(
+            z=z,
+            pos=pos,
+            batch=batch,
+            molecule=self.baseline_molecule,
+            box_l=box,
+            epsilon_eV=self.baseline_eps,
+            sigma_A=self.baseline_sigma,
+            r_cut_A=self.baseline_cutoff,
+            energy_offset_eV=self.baseline_energy_offset,
+        )
+        return force_pred + f_ref.to(device=force_pred.device, dtype=force_pred.dtype)
+
     def step(self, batch, loss_fn_list, stage):
         """Compute default LNNP loss, then add physics terms during train stage."""
         total_loss = super().step(batch, loss_fn_list, stage)
@@ -231,20 +252,30 @@ class PhysicsInformedLNNP(DeltaLNNP):
                 q=batch.q if self.hparams.charge else None,
                 s=batch.s if self.hparams.spin else None,
             )
+            box = batch.box if "box" in batch else None
+            force_for_physics = neg_dy
 
             loss_momentum = torch.tensor(0.0, device=self.device)
             loss_nve = torch.tensor(0.0, device=self.device)
             loss_pbc = torch.tensor(0.0, device=self.device)
 
             if self.momentum_weight > 0:
+                force_for_physics = self._absolute_force_from_prediction(
+                    batch.z,
+                    batch.pos,
+                    batch.batch,
+                    neg_dy,
+                    box=box,
+                )
                 # Apply momentum symmetry per molecule, then average.
                 unique_batches = torch.unique(batch.batch)
                 for mol_idx in unique_batches:
                     mask = batch.batch == mol_idx
-                    loss_momentum += momentum_symmetry_loss(batch.pos[mask], neg_dy[mask])
+                    loss_momentum += momentum_symmetry_loss(batch.pos[mask], force_for_physics[mask])
                 loss_momentum = loss_momentum / len(unique_batches)
 
             effective_nve_weight = self._effective_nve_weight()
+            self._last_nve_diagnostics = {}
             if effective_nve_weight > 0 and self.train_batch_counter % self.nve_freq == 0:
                 # NVE is expensive, so it is sampled every nve_freq steps.
                 # For short development sweeps, avoid setting this so high that
@@ -287,6 +318,9 @@ class PhysicsInformedLNNP(DeltaLNNP):
             self.log("train_loss_nve_weighted", weighted_nve, on_step=False, on_epoch=True)
             self.log("train_loss_pbc_weighted", weighted_pbc, on_step=False, on_epoch=True)
             self.log("train_nve_weight_effective", effective_nve_weight, on_step=False, on_epoch=True)
+            nve_diag = getattr(self, "_last_nve_diagnostics", {})
+            for key, value in nve_diag.items():
+                self.log(f"train_nve_{key}", value, on_step=False, on_epoch=True)
 
             physics_loss = weighted_momentum + weighted_nve + weighted_pbc
             denom = torch.abs(supervised_loss.detach()) + 1e-12
@@ -302,6 +336,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
         return total_loss
 
     def _run_model_rollout(self, dataset, start_idx, steps, dt_fs, energy_log_stride):
+        energy_log_stride = max(1, int(energy_log_stride))
         s0 = dataset[start_idx]
         s1 = dataset[start_idx + 1]
 
@@ -313,8 +348,28 @@ class PhysicsInformedLNNP(DeltaLNNP):
 
         batch = torch.zeros(z.shape[0], dtype=torch.long, device=self.device)
         U0, F0 = self._predict_absolute_energy_forces(z, x, batch)
+        if (
+            not torch.isfinite(U0).all()
+            or not torch.isfinite(F0).all()
+            or F0.abs().max().item() > 1e6
+        ):
+            return {
+                "failed": True,
+                "fail_reason": "initial_force_or_energy_numerical_blowup",
+                "series": {"step": [], "drift": []},
+                "final_drift": None,
+                "max_abs_drift": None,
+            }
         a = (F0 * FORCE_TO_ACCEL) / masses.view(-1, 1)
         E0 = kinetic_energy(masses, v) + U0
+        if not torch.isfinite(E0).all():
+            return {
+                "failed": True,
+                "fail_reason": "initial_force_or_energy_numerical_blowup",
+                "series": {"step": [], "drift": []},
+                "final_drift": None,
+                "max_abs_drift": None,
+            }
 
         series = {"step": [], "drift": []}
         failed = False
@@ -330,6 +385,14 @@ class PhysicsInformedLNNP(DeltaLNNP):
                 break
 
             U, F = self._predict_absolute_energy_forces(z, x, batch)
+            if (
+                not torch.isfinite(U).all()
+                or not torch.isfinite(F).all()
+                or F.abs().max().item() > 1e6
+            ):
+                failed = True
+                fail_reason = "force_or_energy_numerical_blowup"
+                break
             a_new = (F * FORCE_TO_ACCEL) / masses.view(-1, 1)
             v = v_half + 0.5 * dt_fs * a_new
             a = a_new
@@ -358,23 +421,39 @@ class PhysicsInformedLNNP(DeltaLNNP):
         return None if not values else float(median(values))
 
     def _evaluate_rollout_group(self, dataset, start_indices, count, steps, energy_log_stride):
-        if dataset is None or not start_indices or count <= 0:
+        if dataset is None or count <= 0:
             return None
+        if not start_indices:
+            return {
+                "count": 0,
+                "success_count": 0,
+                "failure_rate": 1.0,
+                "median_mean_abs_drift_eV": self.validation_rollout_max_score,
+                "median_max_abs_drift_eV": self.validation_rollout_max_score,
+                "median_abs_final_drift_eV": self.validation_rollout_max_score,
+                "fail_reasons": {"no_valid_rollout_start": 1},
+                "score": self.validation_rollout_max_score,
+            }
 
         chosen = start_indices[:count]
+        energy_log_stride = max(1, int(energy_log_stride))
         fail_reasons = Counter()
         mean_abs_drifts = []
         max_abs_drifts = []
         final_abs_drifts = []
 
         for start_idx in chosen:
-            rollout = self._run_model_rollout(
-                dataset=dataset,
-                start_idx=int(start_idx),
-                steps=steps,
-                dt_fs=self.nve_dt_fs,
-                energy_log_stride=energy_log_stride,
-            )
+            try:
+                rollout = self._run_model_rollout(
+                    dataset=dataset,
+                    start_idx=int(start_idx),
+                    steps=steps,
+                    dt_fs=self.nve_dt_fs,
+                    energy_log_stride=energy_log_stride,
+                )
+            except Exception:
+                fail_reasons["rollout_exception"] += 1
+                continue
             if rollout["failed"]:
                 fail_reasons[rollout["fail_reason"] or "unknown"] += 1
                 continue
@@ -387,21 +466,28 @@ class PhysicsInformedLNNP(DeltaLNNP):
             final_abs_drifts.append(float(abs(rollout["final_drift"])))
 
         failure_rate = float((len(chosen) - len(mean_abs_drifts)) / len(chosen))
+        median_mean_abs_drift = self._median_or_none(mean_abs_drifts)
+        median_max_abs_drift = self._median_or_none(max_abs_drifts)
+        median_abs_final_drift = self._median_or_none(final_abs_drifts)
         if mean_abs_drifts:
             score = (
-                self._median_or_none(mean_abs_drifts)
-                + 0.5 * self._median_or_none(max_abs_drifts)
+                median_mean_abs_drift
+                + 0.5 * median_max_abs_drift
                 + self.validation_rollout_failure_penalty * failure_rate
             )
         else:
             score = self.validation_rollout_max_score
+            median_mean_abs_drift = self.validation_rollout_max_score
+            median_max_abs_drift = self.validation_rollout_max_score
+            median_abs_final_drift = self.validation_rollout_max_score
 
         return {
             "count": len(chosen),
+            "success_count": len(mean_abs_drifts),
             "failure_rate": failure_rate,
-            "median_mean_abs_drift_eV": self._median_or_none(mean_abs_drifts),
-            "median_max_abs_drift_eV": self._median_or_none(max_abs_drifts),
-            "median_abs_final_drift_eV": self._median_or_none(final_abs_drifts),
+            "median_mean_abs_drift_eV": median_mean_abs_drift,
+            "median_max_abs_drift_eV": median_max_abs_drift,
+            "median_abs_final_drift_eV": median_abs_final_drift,
             "fail_reasons": dict(fail_reasons),
             "score": float(score),
         }
@@ -459,13 +545,18 @@ class PhysicsInformedLNNP(DeltaLNNP):
                 energy_log_stride=self.validation_rollout_energy_log_stride,
             )
             if rollout_metrics is not None:
+                self.log("val_rollout_score", rollout_metrics["score"], on_step=False, on_epoch=True, prog_bar=True)
+                self.log("val_rollout_success_count", float(rollout_metrics["success_count"]), on_step=False, on_epoch=True)
+                self.log("val_rollout_failure_rate", rollout_metrics["failure_rate"], on_step=False, on_epoch=True, prog_bar=True)
                 self.log("val_rollout_median_mean_abs_drift_eV", rollout_metrics["median_mean_abs_drift_eV"], on_step=False, on_epoch=True)
                 self.log("val_rollout_median_max_abs_drift_eV", rollout_metrics["median_max_abs_drift_eV"], on_step=False, on_epoch=True)
                 self.log("val_rollout_median_abs_final_drift_eV", rollout_metrics["median_abs_final_drift_eV"], on_step=False, on_epoch=True)
-                self.log("val_rollout_failure_rate", rollout_metrics["failure_rate"], on_step=False, on_epoch=True, prog_bar=True)
-                self.log("val_rollout_score", rollout_metrics["score"], on_step=False, on_epoch=True, prog_bar=True)
                 self.log("val_rollout_fail_position_numerical_blowup_count", float(rollout_metrics["fail_reasons"].get("position_numerical_blowup", 0)), on_step=False, on_epoch=True)
                 self.log("val_rollout_fail_energy_numerical_blowup_count", float(rollout_metrics["fail_reasons"].get("energy_numerical_blowup", 0)), on_step=False, on_epoch=True)
+                self.log("val_rollout_fail_force_or_energy_numerical_blowup_count", float(rollout_metrics["fail_reasons"].get("force_or_energy_numerical_blowup", 0)), on_step=False, on_epoch=True)
+                self.log("val_rollout_fail_initial_force_or_energy_numerical_blowup_count", float(rollout_metrics["fail_reasons"].get("initial_force_or_energy_numerical_blowup", 0)), on_step=False, on_epoch=True)
+                self.log("val_rollout_fail_exception_count", float(rollout_metrics["fail_reasons"].get("rollout_exception", 0)), on_step=False, on_epoch=True)
+                self.log("val_rollout_fail_no_valid_start_count", float(rollout_metrics["fail_reasons"].get("no_valid_rollout_start", 0)), on_step=False, on_epoch=True)
         except Exception as exc:
             print(f"Warning: rollout-aware validation metrics failed: {exc}")
 
@@ -485,6 +576,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
                 self.log("train_short_rollout_mean_abs_drift_eV", probe_metrics["median_mean_abs_drift_eV"], on_step=False, on_epoch=True)
                 self.log("train_short_rollout_max_abs_drift_eV", probe_metrics["median_max_abs_drift_eV"], on_step=False, on_epoch=True)
                 self.log("train_short_rollout_failure_rate", probe_metrics["failure_rate"], on_step=False, on_epoch=True)
+                self.log("train_short_rollout_success_count", float(probe_metrics["success_count"]), on_step=False, on_epoch=True)
         except Exception as exc:
             print(f"Warning: short-rollout probe metrics failed: {exc}")
 
@@ -495,6 +587,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
         In delta mode that means baseline + learned residual, matching the
         deployed hybrid potential rather than just DeltaU alone.
         """
+        self._last_nve_diagnostics = {}
         if self.trajectory_dataset is None or not self.trajectory_start_indices:
             return torch.tensor(0.0, device=self.device)
 
@@ -509,7 +602,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
         try:
             if self.nve_loss_mode == "total_energy":
                 masses = get_atomic_masses(traj_batch["Z"]).to(self.device)
-                return nve_loss_with_kinetic_energy(
+                loss, stats = nve_loss_with_kinetic_energy(
                     abs_energy_model,
                     traj_batch,
                     self.device,
@@ -517,7 +610,12 @@ class PhysicsInformedLNNP(DeltaLNNP):
                     dt=self.nve_dt_fs,
                     relative=self.nve_relative,
                     eps=self.nve_relative_eps,
+                    drift_scale_eV=self.nve_drift_scale_eV,
+                    per_atom=self.nve_per_atom,
+                    return_stats=True,
                 )
+                self._last_nve_diagnostics = stats
+                return loss
 
             if self.nve_loss_mode != "potential_only":
                 raise ValueError(
@@ -525,16 +623,22 @@ class PhysicsInformedLNNP(DeltaLNNP):
                     "Expected 'total_energy' or 'potential_only'."
                 )
 
-            return nve_loss_from_trajectory(
+            loss, stats = nve_loss_from_trajectory(
                 abs_energy_model,
                 traj_batch,
                 self.device,
                 relative=self.nve_relative,
                 eps=self.nve_relative_eps,
                 dt=self.nve_dt_fs,
+                drift_scale_eV=self.nve_drift_scale_eV,
+                per_atom=self.nve_per_atom,
+                return_stats=True,
             )
+            self._last_nve_diagnostics = stats
+            return loss
         except Exception as exc:
             print(f"Warning: NVE loss failed: {exc}")
+            self._last_nve_diagnostics = {}
             return torch.tensor(0.0, device=self.device)
 
     def _extract_box_lengths(self, box, graph_idx):
@@ -627,8 +731,10 @@ def train_physics_informed_model(
     nve_freq=50,
     nve_warmup_epochs=5,
     nve_ramp_epochs=20,
-    nve_relative=True,
+    nve_relative=False,
     nve_relative_eps=1e-6,
+    nve_drift_scale_eV=0.1,
+    nve_per_atom=True,
     nve_loss_mode="total_energy",
     nve_dt_fs=0.5,
     delta_learning=False,
@@ -750,6 +856,8 @@ def train_physics_informed_model(
         "nve_ramp_epochs": nve_ramp_epochs,
         "nve_relative": bool(nve_relative),
         "nve_relative_eps": float(nve_relative_eps),
+        "nve_drift_scale_eV": float(nve_drift_scale_eV),
+        "nve_per_atom": bool(nve_per_atom),
         "nve_loss_mode": str(nve_loss_mode),
         "nve_dt_fs": float(nve_dt_fs),
         "val_rollout_steps": int(val_rollout_steps),
@@ -861,6 +969,8 @@ def train_physics_informed_model(
             "nve_ramp_epochs": nve_ramp_epochs,
             "nve_relative": bool(nve_relative),
             "nve_relative_eps": float(nve_relative_eps),
+            "nve_drift_scale_eV": float(nve_drift_scale_eV),
+            "nve_per_atom": bool(nve_per_atom),
             "nve_loss_mode": str(nve_loss_mode),
             "nve_dt_fs": float(nve_dt_fs),
         },
@@ -909,9 +1019,13 @@ if __name__ == "__main__":
     parser.add_argument("--nve-ramp-epochs", type=int, default=20)
     parser.add_argument("--nve-relative", dest="nve_relative", action="store_true")
     parser.add_argument("--nve-absolute", dest="nve_relative", action="store_false")
-    parser.set_defaults(nve_relative=True)
+    parser.set_defaults(nve_relative=False)
     parser.add_argument("--nve-relative-eps", type=float, default=1e-6)
-    parser.add_argument("--nve-loss-mode", type=str, default="total_energy")
+    parser.add_argument("--nve-drift-scale-ev", type=float, default=0.1)
+    parser.add_argument("--nve-per-atom", dest="nve_per_atom", action="store_true")
+    parser.add_argument("--nve-total-drift", dest="nve_per_atom", action="store_false")
+    parser.set_defaults(nve_per_atom=True)
+    parser.add_argument("--nve-loss-mode", type=str, default="total_energy", choices=["total_energy", "potential_only"])
     parser.add_argument("--nve-dt-fs", type=float, default=0.5)
     parser.add_argument("--val-rollout-steps", type=int, default=250)
     parser.add_argument("--val-rollout-count", type=int, default=6)
@@ -945,6 +1059,8 @@ if __name__ == "__main__":
         nve_ramp_epochs=args.nve_ramp_epochs,
         nve_relative=args.nve_relative,
         nve_relative_eps=args.nve_relative_eps,
+        nve_drift_scale_eV=args.nve_drift_scale_ev,
+        nve_per_atom=args.nve_per_atom,
         nve_loss_mode=args.nve_loss_mode,
         nve_dt_fs=args.nve_dt_fs,
         val_rollout_steps=args.val_rollout_steps,

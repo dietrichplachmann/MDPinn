@@ -9,6 +9,7 @@
       "momentum regularization is disabled by default for MD17 single-molecule sweeps because the model already encodes most symmetry structure.",
       "nve_loss_mode=total_energy regularizes K+U drift instead of potential-only drift.",
       "nve_dt_fs is aligned to rollout dt so the training-side trajectory regularizer matches evaluation.",
+      "nve_relative=false avoids dividing by arbitrary absolute energy offsets; nve_drift_scale_eV controls the per-atom drift scale.",
       "the NVE warmup/ramp/frequency defaults are tuned so the physics loss actually contributes during short 10-epoch development sweeps.",
       "rollout-aware validation is now the intended checkpoint metric for physics runs."
     ]
@@ -38,6 +39,9 @@
       "nve_ramp_epochs": 3,
       "nve_loss_mode": "total_energy",
       "nve_dt_fs": 0.1,
+      "nve_relative": false,
+      "nve_drift_scale_eV": 0.1,
+      "nve_per_atom": true,
       "val_rollout_steps": 250,
       "val_rollout_count": 6,
       "val_rollout_energy_log_stride": 10,
@@ -46,7 +50,6 @@
       "train_rollout_probe_steps": 100,
       "train_rollout_probe_count": 3,
       "train_rollout_probe_energy_log_stride": 10,
-      "nve_relative": true,
       "pbc_weight": 0.0
     },
     "physics_model_grid": [
@@ -131,8 +134,10 @@
           "nve_freq": 25,
           "nve_warmup_epochs": 1,
           "nve_ramp_epochs": 3,
-          "nve_relative": true,
+          "nve_relative": false,
           "nve_relative_eps": 1e-06,
+          "nve_drift_scale_eV": 0.1,
+          "nve_per_atom": true,
           "nve_loss_mode": "total_energy",
           "nve_dt_fs": 0.1,
           "val_rollout_steps": 250,
