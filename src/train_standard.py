@@ -313,6 +313,7 @@ def train_standard_model(
             "json": str(Path(save_dir) / f"{checkpoint_name}_history.json"),
             "csv": str(Path(save_dir) / f"{checkpoint_name}_history.csv"),
             "plot": str(Path(save_dir) / f"{checkpoint_name}_history.png"),
+            "plot_no_epoch0": str(Path(save_dir) / f"{checkpoint_name}_history_no_epoch0.png"),
         },
         "best_model_path": best_model_path,
         "best_model_score": best_model_score,
