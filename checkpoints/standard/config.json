@@ -54,7 +54,7 @@
     "dataset": "MD17",
     "molecule": "aspirin",
     "batch_size": 32,
-    "num_epochs": 5,
+    "num_epochs": 20,
     "lr": 0.0001,
     "seed": 42,
     "weight_decay": 0.0,
@@ -65,31 +65,32 @@
     "delta_learning": true
   },
   "validation_metrics": {
-    "epoch": 4.0,
+    "epoch": 19.0,
     "lr": 9.999999747378752e-05,
-    "train_total_mse_loss": 215.34764099121094,
-    "val_total_l1_loss": 2.4256536960601807,
-    "val_total_mse_loss": 11.034562110900879,
-    "train_y_mse_loss": 3990.398193359375,
-    "val_y_l1_loss": 5.632849216461182,
-    "val_y_mse_loss": 34.382606506347656,
-    "train_neg_dy_mse_loss": 16.66075325012207,
-    "val_neg_dy_l1_loss": 2.2568538188934326,
-    "val_neg_dy_mse_loss": 9.805717468261719,
-    "post_test.test_total_l1_loss": 2.566596031188965,
-    "post_test.test_y_l1_loss": 6.3988566398620605,
-    "post_test.test_neg_dy_l1_loss": 2.3648979663848877
+    "train_total_mse_loss": 78.24874877929688,
+    "val_total_l1_loss": 0.72885662317276,
+    "val_total_mse_loss": 1.1296091079711914,
+    "train_y_mse_loss": 1542.934326171875,
+    "val_y_l1_loss": 2.6424295902252197,
+    "val_y_mse_loss": 7.1721625328063965,
+    "train_neg_dy_mse_loss": 1.1600394248962402,
+    "val_neg_dy_l1_loss": 0.6281421780586243,
+    "val_neg_dy_mse_loss": 0.8115799427032471,
+    "post_test.test_total_l1_loss": 0.7067673206329346,
+    "post_test.test_y_l1_loss": 0.7467312216758728,
+    "post_test.test_neg_dy_l1_loss": 0.7046639919281006
   },
   "history_paths": {
-    "json": "checkpoints/standard/aspirin_delta_5ep_history.json",
-    "csv": "checkpoints/standard/aspirin_delta_5ep_history.csv",
-    "plot": "checkpoints/standard/aspirin_delta_5ep_history.png"
+    "json": "checkpoints/standard/aspirin_delta_20ep_history.json",
+    "csv": "checkpoints/standard/aspirin_delta_20ep_history.csv",
+    "plot": "checkpoints/standard/aspirin_delta_20ep_history.png",
+    "plot_no_epoch0": "checkpoints/standard/aspirin_delta_20ep_history_no_epoch0.png"
   },
-  "best_model_path": "/home/lachmadh/projects/MDPinn/checkpoints/standard/aspirin_delta_5ep.ckpt",
-  "best_model_score": 11.034562110900879,
+  "best_model_path": "/home/lachmadh/projects/MDPinn/checkpoints/standard/aspirin_delta_20ep.ckpt",
+  "best_model_score": 0.9267684817314148,
   "test_results": {
-    "test_total_l1_loss": 2.566596031188965,
-    "test_y_l1_loss": 6.3988566398620605,
-    "test_neg_dy_l1_loss": 2.3648979663848877
+    "test_total_l1_loss": 0.7067673206329346,
+    "test_y_l1_loss": 0.7467312216758728,
+    "test_neg_dy_l1_loss": 0.7046639919281006
   }
 }
