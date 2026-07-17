@@ -47,14 +47,7 @@
     "num_rbf": 64,
     "energy_weight": 0.05,
     "force_weight": 0.95,
-    "traj_length": 30,
-    "nve_freq": 25,
-    "nve_warmup_epochs": 1,
-    "nve_ramp_epochs": 3,
-    "nve_relative": true,
-    "nve_relative_eps": 1e-06,
-    "nve_loss_mode": "total_energy",
-    "nve_dt_fs": 0.1,
+    "rollout_dt_fs": 0.1,
     "train_loss": "mse_loss",
     "train_loss_arg": null,
     "pbc_weight": 0.0
@@ -76,11 +69,6 @@
     },
     "physics": {
       "momentum_weight": {
-        "type": "float",
-        "low": 0.0,
-        "high": 0.05
-      },
-      "nve_weight": {
         "type": "float",
         "low": 0.0,
         "high": 0.05

@@ -137,6 +137,24 @@ def _dihedral_score(entry_types: tuple[str, ...], query: tuple[str, ...]) -> int
     return sum(1 for e, q in zip(entry_types, query) if e == q)
 
 
+def has_analytic_baseline(molecule: str | None, raise_on_missing: bool = False) -> bool:
+    """Whether `molecule` has a real analytic (topology-derived) baseline.
+
+    Only aspirin is backed by the parsed CHARMM36/CGenFF GROMACS topology
+    (`_aspirin_reference_energy_forces`). Every other molecule silently falls
+    back to a generic LJ 12-6 potential in `reference_energy_forces`, which is
+    not a physically meaningful residual target for delta-learning.
+    """
+    supported = (molecule or "").lower() == "aspirin" and ASPIRIN_TOP.exists()
+    if not supported and raise_on_missing:
+        raise ValueError(
+            f"delta_learning=True requires an analytic baseline, but molecule='{molecule}' "
+            "has none (only 'aspirin' is supported via the parsed GROMACS/CHARMM36 topology). "
+            "Train with delta_learning=False for this molecule instead."
+        )
+    return supported
+
+
 @lru_cache(maxsize=None)
 def load_reference_energy_offset_eV(molecule: str | None = None) -> float:
     if (molecule or "").lower() != "aspirin":

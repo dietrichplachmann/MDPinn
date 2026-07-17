@@ -388,6 +388,7 @@ def run_rollout_summary(
     seed,
     device,
     energy_log_stride=20,
+    record_positions=False,
 ):
     if dataset != "MD17":
         raise NotImplementedError("Rollout summary currently supports MD17 only.")
@@ -435,25 +436,31 @@ def run_rollout_summary(
             energy_log_stride=energy_log_stride,
             progress_stride=0,
             rollout_id=None,
+            record_positions=record_positions,
         )
         if out["failed"]:
             failed += 1
         else:
             max_abs_drifts.append(float(out["max_abs_drift"]))
             final_drifts.append(float(out["final_drift"]))
-        rollout_rows.append(
-            {
-                "start_idx": int(start_idx),
-                "failed": bool(out["failed"]),
-                "final_step": int(out["final_step"]),
-                "final_drift": None if out["final_drift"] is None else float(out["final_drift"]),
-                "max_abs_drift": None if out["max_abs_drift"] is None else float(out["max_abs_drift"]),
-                "series": {
-                    "step": [int(s) for s in out["series"].get("step", [])],
-                    "drift": [float(d) for d in out["series"].get("drift", [])],
-                },
-            }
-        )
+        row = {
+            "start_idx": int(start_idx),
+            "failed": bool(out["failed"]),
+            "final_step": int(out["final_step"]),
+            "final_drift": None if out["final_drift"] is None else float(out["final_drift"]),
+            "max_abs_drift": None if out["max_abs_drift"] is None else float(out["max_abs_drift"]),
+            "series": {
+                "step": [int(s) for s in out["series"].get("step", [])],
+                "drift": [float(d) for d in out["series"].get("drift", [])],
+            },
+        }
+        if record_positions:
+            # Positions are kept as tensors (not JSON-serialized) since this summary
+            # is consumed in-process by callers like run_ablation_study.py; only
+            # include them when explicitly requested to avoid bloating normal use.
+            row["z"] = z
+            row["x_traj"] = out["series"].get("x", [])
+        rollout_rows.append(row)
 
     return {
         "failed": int(failed),

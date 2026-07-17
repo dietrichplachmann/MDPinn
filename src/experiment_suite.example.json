@@ -6,12 +6,11 @@
     "optuna_stages": "Optional two-stage Optuna flow. Stage entries run in order; stage 1 can promote best params into stage 2 fixed_params.",
     "evaluation_workflow": "Training and evaluation are intentionally separated. Leave run_compare/run_rollout false during training and call src/run_evaluation.py afterward on the checkpoint(s) you want to inspect.",
     "physics_defaults": [
-      "momentum regularization is disabled by default for MD17 single-molecule sweeps because the model already encodes most symmetry structure.",
-      "nve_loss_mode=total_energy regularizes K+U drift instead of potential-only drift.",
-      "nve_dt_fs is aligned to rollout dt so the training-side trajectory regularizer matches evaluation.",
-      "nve_relative=false avoids dividing by arbitrary absolute energy offsets; nve_drift_scale_eV controls the per-atom drift scale.",
-      "the NVE warmup/ramp/frequency defaults are tuned so the physics loss actually contributes during short 10-epoch development sweeps.",
-      "rollout-aware validation is now the intended checkpoint metric for physics runs."
+      "As of the 2026-07 restructuring, the physics-informed loss is momentum-only: the NVE trajectory-drift term was removed from the active training path (the underlying loss functions remain in physics_losses.py for reference, unused here).",
+      "momentum_weight defaults to 0.0 for MD17 single-molecule sweeps because the model already encodes most symmetry structure via equivariance; set it explicitly to enable the momentum-conservation penalty.",
+      "Model selection (ModelCheckpoint/EarlyStopping monitor) is val_total_mse_loss for every condition, identical to the standard (non-physics) path, so checkpoint selection is not a confound between ablation cells.",
+      "val_rollout_score and the static guardrails are still computed and logged every epoch as diagnostics; they are not used to pick the 'best' checkpoint.",
+      "delta_learning is only physically meaningful for aspirin (the only molecule with an analytic CHARMM36/GROMACS-derived baseline); train_standard.py/train_physics.py now raise a ValueError if delta_learning=True is requested for any other molecule."
     ]
   },
   "defaults": {
@@ -32,16 +31,7 @@
     "run_rollout": false,
     "physics_overrides": {
       "momentum_weight": 0.0,
-      "nve_weight": 0.01,
-      "nve_freq": 50,
-      "traj_length": 30,
-      "nve_warmup_epochs": 1,
-      "nve_ramp_epochs": 3,
-      "nve_loss_mode": "total_energy",
-      "nve_dt_fs": 0.1,
-      "nve_relative": false,
-      "nve_drift_scale_eV": 0.1,
-      "nve_per_atom": true,
+      "rollout_dt_fs": 0.1,
       "val_rollout_steps": 250,
       "val_rollout_count": 6,
       "val_rollout_energy_log_stride": 10,
@@ -130,16 +120,7 @@
           "num_rbf": 64,
           "energy_weight": 0.05,
           "force_weight": 0.95,
-          "traj_length": 30,
-          "nve_freq": 25,
-          "nve_warmup_epochs": 1,
-          "nve_ramp_epochs": 3,
-          "nve_relative": false,
-          "nve_relative_eps": 1e-06,
-          "nve_drift_scale_eV": 0.1,
-          "nve_per_atom": true,
-          "nve_loss_mode": "total_energy",
-          "nve_dt_fs": 0.1,
+          "rollout_dt_fs": 0.1,
           "val_rollout_steps": 250,
           "val_rollout_count": 6,
           "val_rollout_energy_log_stride": 10,
@@ -166,11 +147,6 @@
           },
           "physics": {
             "momentum_weight": {
-              "type": "float",
-              "low": 0.0,
-              "high": 0.05
-            },
-            "nve_weight": {
               "type": "float",
               "low": 0.0,
               "high": 0.05
@@ -220,7 +196,7 @@
           },
           "search_space": {
             "common": {},
-            "nve": {}
+            "physics": {}
           }
         }
       ]

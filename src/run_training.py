@@ -134,6 +134,7 @@ def run_standard_training(args):
         num_layers=args.num_layers,
         num_rbf=args.num_rbf,
         checkpoint_name=args.checkpoint_name,
+        seed=args.seed,
     )
 
 
@@ -156,19 +157,9 @@ def run_physics_informed_training(args):
         log_dir="logs/physics_informed",
         force_weight=args.force_weight,
         energy_weight=args.energy_weight,
-        nve_weight=args.nve_weight,
         pbc_weight=args.pbc_weight,
         momentum_weight=args.momentum_weight,
-        traj_length=args.traj_length,
-        nve_freq=args.nve_freq,
-        nve_warmup_epochs=args.nve_warmup_epochs,
-        nve_ramp_epochs=args.nve_ramp_epochs,
-        nve_relative=args.nve_relative,
-        nve_relative_eps=args.nve_relative_eps,
-        nve_drift_scale_eV=args.nve_drift_scale_ev,
-        nve_per_atom=args.nve_per_atom,
-        nve_loss_mode=args.nve_loss_mode,
-        nve_dt_fs=args.nve_dt_fs,
+        rollout_dt_fs=args.rollout_dt_fs,
         val_rollout_steps=args.val_rollout_steps,
         val_rollout_count=args.val_rollout_count,
         val_rollout_energy_log_stride=args.val_rollout_energy_log_stride,
@@ -186,6 +177,7 @@ def run_physics_informed_training(args):
         num_layers=args.num_layers,
         num_rbf=args.num_rbf,
         checkpoint_name=args.checkpoint_name,
+        seed=args.seed,
     )
 
 
@@ -237,23 +229,14 @@ def parse_args():
     parser.add_argument("--force-weight", type=float, default=0.95)
     parser.add_argument("--energy-weight", type=float, default=0.05)
 
-    parser.add_argument("--nve-weight", type=float, default=0.01)
     parser.add_argument("--pbc-weight", type=float, default=0.0)
     parser.add_argument("--momentum-weight", type=float, default=0.01)
-    parser.add_argument("--traj-length", type=int, default=100)
-    parser.add_argument("--nve-freq", type=int, default=50)
-    parser.add_argument("--nve-warmup-epochs", type=int, default=5)
-    parser.add_argument("--nve-ramp-epochs", type=int, default=20)
-    parser.add_argument("--nve-relative", dest="nve_relative", action="store_true")
-    parser.add_argument("--nve-absolute", dest="nve_relative", action="store_false")
-    parser.set_defaults(nve_relative=False)
-    parser.add_argument("--nve-relative-eps", type=float, default=1e-6)
-    parser.add_argument("--nve-drift-scale-ev", type=float, default=0.1)
-    parser.add_argument("--nve-per-atom", dest="nve_per_atom", action="store_true")
-    parser.add_argument("--nve-total-drift", dest="nve_per_atom", action="store_false")
-    parser.set_defaults(nve_per_atom=True)
-    parser.add_argument("--nve-loss-mode", type=str, default="total_energy", choices=["total_energy", "potential_only"])
-    parser.add_argument("--nve-dt-fs", type=float, default=0.5)
+    parser.add_argument(
+        "--rollout-dt-fs",
+        type=float,
+        default=0.5,
+        help="Timestep for diagnostic-only model-driven rollouts (val_rollout_score, train probe); not part of any loss.",
+    )
     parser.add_argument("--val-rollout-steps", type=int, default=250)
     parser.add_argument("--val-rollout-count", type=int, default=6)
     parser.add_argument("--val-rollout-energy-log-stride", type=int, default=10)
@@ -267,6 +250,7 @@ def parse_args():
     parser.add_argument("--num-layers", type=int, default=6)
     parser.add_argument("--num-rbf", type=int, default=64)
     parser.add_argument("--checkpoint-name", type=str, default="best_model")
+    parser.add_argument("--seed", type=int, default=42)
 
     parser.add_argument("--mode", type=str, choices=["standard", "physics", "tune"])
     parser.add_argument("--tuning-config", type=str, default=None)
@@ -306,6 +290,7 @@ def main():
     print(f"  epochs={args.epochs}")
     print(f"  lr={args.lr}")
     print(f"  delta_learning={args.delta_learning}")
+    print(f"  seed={args.seed}")
     if args.delta_learning:
         print(
             f"  baseline=(eps={args.baseline_eps}, sigma={args.baseline_sigma}, cutoff={args.baseline_cutoff})"
@@ -317,15 +302,7 @@ def main():
         print(f"  checkpoint_name={args.checkpoint_name}")
     if choice == "2":
         print(f"  momentum_weight={args.momentum_weight}")
-        print(f"  nve_weight={args.nve_weight}")
-        print(f"  nve_freq={args.nve_freq}")
-        print(f"  nve_warmup_epochs={args.nve_warmup_epochs}")
-        print(f"  nve_ramp_epochs={args.nve_ramp_epochs}")
-        print(f"  nve_relative={args.nve_relative}")
-        print(f"  nve_drift_scale_eV={args.nve_drift_scale_ev}")
-        print(f"  nve_per_atom={args.nve_per_atom}")
-        print(f"  nve_loss_mode={args.nve_loss_mode}")
-        print(f"  nve_dt_fs={args.nve_dt_fs}")
+        print(f"  rollout_dt_fs={args.rollout_dt_fs} (diagnostic rollouts only, not a loss term)")
         print(f"  val_rollout_steps={args.val_rollout_steps}")
         print(f"  val_rollout_count={args.val_rollout_count}")
     if choice == "3":

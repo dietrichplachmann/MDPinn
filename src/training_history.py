@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import csv
 import json
+import time
 from pathlib import Path
 
 import lightning.pytorch as pl
 
 
 class MetricHistoryCallback(pl.Callback):
-    """Persist per-epoch metrics for later plotting and inspection."""
+    """Persist per-epoch metrics (plus wall-clock time and step count) for later
+    plotting, inspection, and training-efficiency comparisons across conditions."""
 
     def __init__(self, output_dir: str | Path, run_name: str):
         super().__init__()
         self.output_dir = Path(output_dir)
         self.run_name = str(run_name)
         self.rows: list[dict[str, float | int]] = []
+        self._fit_start_time: float | None = None
+        self._last_cumulative_wall_seconds: float = 0.0
 
     @staticmethod
     def _to_float(value):
@@ -24,18 +28,36 @@ class MetricHistoryCallback(pl.Callback):
             return float(value)
         return None
 
+    def on_fit_start(self, trainer, pl_module):
+        self._fit_start_time = time.perf_counter()
+        self._last_cumulative_wall_seconds = 0.0
+
     def on_validation_epoch_end(self, trainer, pl_module):
         if getattr(trainer, "sanity_checking", False):
             return
 
-        metrics = {"epoch": int(trainer.current_epoch)}
+        logged = {}
         for key, value in trainer.callback_metrics.items():
             scalar = self._to_float(value)
             if scalar is not None:
-                metrics[key] = scalar
+                logged[key] = scalar
 
-        if len(metrics) > 1:
-            self.rows.append(metrics)
+        if not logged:
+            return
+
+        metrics = {"epoch": int(trainer.current_epoch), "global_step": int(trainer.global_step), **logged}
+
+        # Wall-clock timing: recorded here (not on_train_epoch_end) because Lightning
+        # runs validation before on_train_epoch_end fires for a given epoch, and the
+        # quantity we actually want is "wall time elapsed to reach this validation
+        # result" - exactly what training-efficiency/convergence-speed comparisons need.
+        if self._fit_start_time is not None:
+            cumulative = time.perf_counter() - self._fit_start_time
+            metrics["cumulative_wall_seconds"] = cumulative
+            metrics["epoch_wall_seconds"] = cumulative - self._last_cumulative_wall_seconds
+            self._last_cumulative_wall_seconds = cumulative
+
+        self.rows.append(metrics)
 
     def on_fit_end(self, trainer, pl_module):
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -116,18 +138,14 @@ class MetricHistoryCallback(pl.Callback):
             key
             for key in (
                 "train_loss_momentum",
-                "train_loss_nve",
                 "train_loss_pbc",
                 "train_loss_momentum_weighted",
-                "train_loss_nve_weighted",
                 "train_loss_pbc_weighted",
                 "train_physics_to_supervised_ratio",
-                "train_nve_to_supervised_ratio",
                 "train_momentum_to_supervised_ratio",
-                "train_nve_mean_abs_drift_eV",
-                "train_nve_max_abs_drift_eV",
-                "train_nve_mean_abs_drift_per_atom_eV",
-                "train_nve_max_abs_drift_per_atom_eV",
+                # val_rollout_* / train_short_rollout_* are diagnostic-only (not part
+                # of the training loss) - see PhysicsInformedLNNP.on_validation_epoch_end
+                # / on_train_epoch_end in train_physics.py.
                 "val_rollout_median_mean_abs_drift_eV",
                 "val_rollout_median_max_abs_drift_eV",
                 "val_rollout_failure_rate",
@@ -168,3 +186,38 @@ class MetricHistoryCallback(pl.Callback):
         suffix = "_history_no_epoch0.png" if exclude_epoch0 else "_history.png"
         fig.savefig(self.output_dir / f"{self.run_name}{suffix}", dpi=200, bbox_inches="tight")
         plt.close(fig)
+
+
+def find_convergence_point(rows, metric_key: str, threshold: float, mode: str = "min"):
+    """Return the first row (in epoch order) where a run's validation metric
+    crosses a shared threshold, or None if it never does.
+
+    Used to compare training efficiency across ablation conditions: given a
+    target level of accuracy (typically the best value some reference
+    condition reached), this finds how many epochs / gradient steps /
+    wall-clock seconds each other condition needed to reach the same level.
+    Reads the same row-dict format MetricHistoryCallback writes to
+    `{run_name}_history.json` (each row has at least "epoch", "global_step",
+    "cumulative_wall_seconds", plus whatever scalar metrics were logged).
+
+    Args:
+        rows: list of per-epoch metric dicts (e.g. json.load of a *_history.json file).
+        metric_key: which logged metric to threshold on (e.g. "val_total_mse_loss").
+        threshold: the target value.
+        mode: "min" - first row where value <= threshold (e.g. a loss dropping to a
+            target); "max" - first row where value >= threshold.
+
+    Returns:
+        The matching row dict (so callers can read row["epoch"], row["global_step"],
+        row["cumulative_wall_seconds"]), or None if metric_key is never present or
+        the threshold is never crossed.
+    """
+    if mode not in ("min", "max"):
+        raise ValueError(f"mode must be 'min' or 'max', got {mode!r}")
+
+    ordered = sorted((row for row in rows if metric_key in row), key=lambda row: row["epoch"])
+    for row in ordered:
+        value = row[metric_key]
+        if (mode == "min" and value <= threshold) or (mode == "max" and value >= threshold):
+            return row
+    return None

@@ -28,6 +28,7 @@ from torchmdnet.module import LNNP
 
 from baseline_potential import (
     calibrate_reference_energy_offset_eV,
+    has_analytic_baseline,
     load_reference_energy_offset_eV,
     reference_energy_forces_batched,
 )
@@ -54,6 +55,8 @@ class DeltaLNNP(LNNP):
         super().__init__(hparams, **kwargs)
         self.delta_learning = bool(hparams.get("delta_learning", False))
         self.baseline_molecule = str(hparams.get("baseline_molecule", hparams.get("molecule", "aspirin")))
+        if self.delta_learning:
+            has_analytic_baseline(self.baseline_molecule, raise_on_missing=True)
         self.baseline_eps = float(hparams.get("baseline_epsilon_eV", 0.01))
         self.baseline_sigma = float(hparams.get("baseline_sigma_A", 1.0))
         self.baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))

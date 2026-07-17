@@ -146,6 +146,7 @@ def velocity_verlet_rollout(
     energy_log_stride: int = 10,
     progress_stride: int = 0,
     rollout_id: int = None,
+    record_positions: bool = False,
 ):
     """Run one NVE rollout and return logged energies/drift statistics.
 
@@ -154,6 +155,12 @@ def velocity_verlet_rollout(
     - full-step position update
     - force recompute
     - second half-step velocity update
+
+    If `record_positions` is True, positions are additionally appended (as CPU
+    tensors) to `series["x"]` at the same stride as the energy log, so callers
+    (e.g. src/structural_metrics.py) can compute bond-length/angle statistics
+    without re-running the rollout. Default is False so existing callers are
+    unaffected.
     """
     x = x0.clone()
     v = v0.clone()
@@ -176,6 +183,9 @@ def velocity_verlet_rollout(
         "drift": [],
         "step": [],
     }
+    if record_positions:
+        series["x"] = [x0.detach().cpu().clone()]
+        series["x_step"] = [0]
 
     failed = False
     fail_reason = None
@@ -207,6 +217,9 @@ def velocity_verlet_rollout(
             series["U"].append(float(U.item()))
             series["K"].append(float(K.item()))
             series["drift"].append(float(drift.item()))
+            if record_positions:
+                series["x"].append(x.detach().cpu().clone())
+                series["x_step"].append(step)
 
             if torch.isnan(E) or torch.isinf(E):
                 failed = True

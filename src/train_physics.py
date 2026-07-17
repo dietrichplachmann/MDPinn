@@ -28,20 +28,23 @@ from torchmdnet.module import LNNP
 
 from baseline_potential import (
     calibrate_reference_energy_offset_eV,
+    has_analytic_baseline,
     load_reference_energy_offset_eV,
     reference_energy_forces_batched,
 )
 from data_splits import contiguous_split
 from physics_losses import (
     momentum_symmetry_loss,
-    nve_loss_from_trajectory,
-    nve_loss_with_kinetic_energy,
-    build_trajectory_batch,
     periodic_bc_loss_improved,
     get_atomic_masses,
 )
 from rollout_nve import FORCE_TO_ACCEL, kinetic_energy
 from training_history import MetricHistoryCallback
+
+# NVE trajectory-drift losses (nve_loss_from_trajectory, nve_loss_with_kinetic_energy,
+# build_trajectory_batch) previously lived on the active training path here. Per the
+# 2026-07 restructuring, the physics-informed loss is momentum-only; those functions
+# remain in physics_losses.py for reference but are no longer imported/used in this file.
 
 
 # PyTorch 2.7 checkpoint compatibility.
@@ -60,6 +63,8 @@ class DeltaLNNP(LNNP):
         super().__init__(hparams, **kwargs)
         self.delta_learning = bool(hparams.get("delta_learning", False))
         self.baseline_molecule = str(hparams.get("baseline_molecule", hparams.get("molecule", "aspirin")))
+        if self.delta_learning:
+            has_analytic_baseline(self.baseline_molecule, raise_on_missing=True)
         self.baseline_eps = float(hparams.get("baseline_epsilon_eV", 0.01))
         self.baseline_sigma = float(hparams.get("baseline_sigma_A", 1.0))
         self.baseline_cutoff = float(hparams.get("baseline_cutoff_A", 5.0))
@@ -108,27 +113,12 @@ class PhysicsInformedLNNP(DeltaLNNP):
         super().__init__(hparams, **kwargs)
 
         self.momentum_weight = float(hparams.get("momentum_weight", 0.01))
-        self.nve_weight = float(hparams.get("nve_weight", 0.01))
         self.pbc_weight = float(hparams.get("pbc_weight", 0.0))
 
-        self.traj_length = int(hparams.get("traj_length", 100))
-        self.nve_freq = int(hparams.get("nve_freq", 50))
-        self.nve_warmup_epochs = int(hparams.get("nve_warmup_epochs", 5))
-        self.nve_ramp_epochs = int(hparams.get("nve_ramp_epochs", 20))
-        self.nve_relative = bool(hparams.get("nve_relative", False))
-        self.nve_relative_eps = float(hparams.get("nve_relative_eps", 1e-6))
-        self.nve_drift_scale_eV = float(hparams.get("nve_drift_scale_eV", 0.1))
-        self.nve_per_atom = bool(hparams.get("nve_per_atom", True))
-        # `total_energy` is the recommended default for MD because it constrains
-        # the physically relevant Hamiltonian drift rather than potential-only drift.
-        self.nve_loss_mode = str(hparams.get("nve_loss_mode", "total_energy"))
-        # Keep the training-side trajectory timestep aligned with rollout/eval.
-        self.nve_dt_fs = float(hparams.get("nve_dt_fs", 0.5))
-        self._last_nve_diagnostics = {}
+        # Timestep used only for the diagnostic model-driven rollouts below
+        # (validation rollout score, train rollout probe) - not part of any loss.
+        self.rollout_dt_fs = float(hparams.get("rollout_dt_fs", 0.5))
 
-        self.trajectory_dataset = None
-        self.trajectory_start_indices = []
-        self.train_batch_counter = 0
         self.validation_dataset = None
         self.validation_eval_indices = []
         self.validation_rollout_start_indices = []
@@ -142,21 +132,6 @@ class PhysicsInformedLNNP(DeltaLNNP):
         self.train_rollout_probe_count = int(hparams.get("train_rollout_probe_count", 3))
         self.train_rollout_probe_energy_log_stride = max(1, int(hparams.get("train_rollout_probe_energy_log_stride", 10)))
         self.rollout_probe_dataset = None
-
-    def _effective_nve_weight(self):
-        """Return epoch-scheduled NVE weight (warmup + linear ramp)."""
-        base = self.nve_weight
-        epoch = int(getattr(self, "current_epoch", 0))
-
-        if epoch < self.nve_warmup_epochs:
-            return 0.0
-
-        if self.nve_ramp_epochs <= 0:
-            return base
-
-        ramp_pos = epoch - self.nve_warmup_epochs + 1
-        scale = min(1.0, max(0.0, ramp_pos / self.nve_ramp_epochs))
-        return base * scale
 
     def _predict_absolute_energy(self, z, pos, batch):
         """Return absolute potential energy for NVE loss.
@@ -256,7 +231,6 @@ class PhysicsInformedLNNP(DeltaLNNP):
             force_for_physics = neg_dy
 
             loss_momentum = torch.tensor(0.0, device=self.device)
-            loss_nve = torch.tensor(0.0, device=self.device)
             loss_pbc = torch.tensor(0.0, device=self.device)
 
             if self.momentum_weight > 0:
@@ -273,14 +247,6 @@ class PhysicsInformedLNNP(DeltaLNNP):
                     mask = batch.batch == mol_idx
                     loss_momentum += momentum_symmetry_loss(batch.pos[mask], force_for_physics[mask])
                 loss_momentum = loss_momentum / len(unique_batches)
-
-            effective_nve_weight = self._effective_nve_weight()
-            self._last_nve_diagnostics = {}
-            if effective_nve_weight > 0 and self.train_batch_counter % self.nve_freq == 0:
-                # NVE is expensive, so it is sampled every nve_freq steps.
-                # For short development sweeps, avoid setting this so high that
-                # the physics term almost never fires.
-                loss_nve = self._compute_nve_loss(self.train_batch_counter)
 
             if self.pbc_weight > 0 and hasattr(batch, "box") and batch.box is not None:
                 # Apply periodicity regularization per graph when box vectors are available.
@@ -302,30 +268,19 @@ class PhysicsInformedLNNP(DeltaLNNP):
                     )
                 loss_pbc = loss_pbc / len(unique_batches)
 
-            self.train_batch_counter += 1
-
             weighted_momentum = self.momentum_weight * loss_momentum
-            weighted_nve = effective_nve_weight * loss_nve
             weighted_pbc = self.pbc_weight * loss_pbc
 
             self.log("train_loss_momentum", loss_momentum, on_step=False, on_epoch=True)
-            self.log("train_loss_nve", loss_nve, on_step=False, on_epoch=True)
             self.log("train_loss_pbc", loss_pbc, on_step=False, on_epoch=True)
             self.log("train_loss_momentum_raw", loss_momentum, on_step=False, on_epoch=True)
-            self.log("train_loss_nve_raw", loss_nve, on_step=False, on_epoch=True)
             self.log("train_loss_pbc_raw", loss_pbc, on_step=False, on_epoch=True)
             self.log("train_loss_momentum_weighted", weighted_momentum, on_step=False, on_epoch=True)
-            self.log("train_loss_nve_weighted", weighted_nve, on_step=False, on_epoch=True)
             self.log("train_loss_pbc_weighted", weighted_pbc, on_step=False, on_epoch=True)
-            self.log("train_nve_weight_effective", effective_nve_weight, on_step=False, on_epoch=True)
-            nve_diag = getattr(self, "_last_nve_diagnostics", {})
-            for key, value in nve_diag.items():
-                self.log(f"train_nve_{key}", value, on_step=False, on_epoch=True)
 
-            physics_loss = weighted_momentum + weighted_nve + weighted_pbc
+            physics_loss = weighted_momentum + weighted_pbc
             denom = torch.abs(supervised_loss.detach()) + 1e-12
             self.log("train_physics_to_supervised_ratio", physics_loss.detach() / denom, on_step=False, on_epoch=True)
-            self.log("train_nve_to_supervised_ratio", weighted_nve.detach() / denom, on_step=False, on_epoch=True)
             self.log("train_momentum_to_supervised_ratio", weighted_momentum.detach() / denom, on_step=False, on_epoch=True)
             total_loss = total_loss + physics_loss
             self.log("train_total_with_physics", total_loss, on_step=False, on_epoch=True, prog_bar=True)
@@ -448,7 +403,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
                     dataset=dataset,
                     start_idx=int(start_idx),
                     steps=steps,
-                    dt_fs=self.nve_dt_fs,
+                    dt_fs=self.rollout_dt_fs,
                     energy_log_stride=energy_log_stride,
                 )
             except Exception:
@@ -580,67 +535,6 @@ class PhysicsInformedLNNP(DeltaLNNP):
         except Exception as exc:
             print(f"Warning: short-rollout probe metrics failed: {exc}")
 
-    def _compute_nve_loss(self, batch_idx):
-        """Compute trajectory drift penalty on absolute energy.
-
-        Important: this always evaluates absolute energy drift.
-        In delta mode that means baseline + learned residual, matching the
-        deployed hybrid potential rather than just DeltaU alone.
-        """
-        self._last_nve_diagnostics = {}
-        if self.trajectory_dataset is None or not self.trajectory_start_indices:
-            return torch.tensor(0.0, device=self.device)
-
-        start_idx = self.trajectory_start_indices[(batch_idx * 137) % len(self.trajectory_start_indices)]
-        traj_batch = build_trajectory_batch(self.trajectory_dataset, start_idx, self.traj_length, self.device)
-
-        # Wrap absolute-energy predictor to match expected callable signature
-        # expected by nve_loss_from_trajectory(...).
-        def abs_energy_model(z, pos, batch):
-            return self._predict_absolute_energy(z, pos, batch=batch)
-
-        try:
-            if self.nve_loss_mode == "total_energy":
-                masses = get_atomic_masses(traj_batch["Z"]).to(self.device)
-                loss, stats = nve_loss_with_kinetic_energy(
-                    abs_energy_model,
-                    traj_batch,
-                    self.device,
-                    masses=masses,
-                    dt=self.nve_dt_fs,
-                    relative=self.nve_relative,
-                    eps=self.nve_relative_eps,
-                    drift_scale_eV=self.nve_drift_scale_eV,
-                    per_atom=self.nve_per_atom,
-                    return_stats=True,
-                )
-                self._last_nve_diagnostics = stats
-                return loss
-
-            if self.nve_loss_mode != "potential_only":
-                raise ValueError(
-                    f"Unsupported nve_loss_mode='{self.nve_loss_mode}'. "
-                    "Expected 'total_energy' or 'potential_only'."
-                )
-
-            loss, stats = nve_loss_from_trajectory(
-                abs_energy_model,
-                traj_batch,
-                self.device,
-                relative=self.nve_relative,
-                eps=self.nve_relative_eps,
-                dt=self.nve_dt_fs,
-                drift_scale_eV=self.nve_drift_scale_eV,
-                per_atom=self.nve_per_atom,
-                return_stats=True,
-            )
-            self._last_nve_diagnostics = stats
-            return loss
-        except Exception as exc:
-            print(f"Warning: NVE loss failed: {exc}")
-            self._last_nve_diagnostics = {}
-            return torch.tensor(0.0, device=self.device)
-
     def _extract_box_lengths(self, box, graph_idx):
         """Extract orthorhombic box lengths (Lx,Ly,Lz) for one graph if available."""
         if box is None:
@@ -666,27 +560,6 @@ class PhysicsInformedLNNP(DeltaLNNP):
             return None
 
         return None
-
-
-def _contiguous_train_starts(train_subset, traj_length):
-    """Return start indices whose full trajectory window stays inside the train split.
-
-    `random_split` returns a Subset with shuffled sample indices, which is fine for
-    supervised regression but not for NVE windows that require consecutive frames.
-    This helper finds windows on the underlying MD17 trajectory where every frame in
-    the window belongs to the training subset.
-    """
-    if not hasattr(train_subset, "indices"):
-        return []
-
-    train_indices = sorted(int(idx) for idx in train_subset.indices)
-    train_index_set = set(train_indices)
-    starts = []
-    for start_idx in train_indices:
-        end_idx = start_idx + traj_length
-        if all(frame_idx in train_index_set for frame_idx in range(start_idx, end_idx)):
-            starts.append(start_idx)
-    return starts
 
 
 def _contiguous_subset_starts(subset, required_span=2):
@@ -725,18 +598,8 @@ def train_physics_informed_model(
     force_weight=0.95,
     energy_weight=0.05,
     momentum_weight=0.01,
-    nve_weight=0.01,
     pbc_weight=0.0,
-    traj_length=100,
-    nve_freq=50,
-    nve_warmup_epochs=5,
-    nve_ramp_epochs=20,
-    nve_relative=False,
-    nve_relative_eps=1e-6,
-    nve_drift_scale_eV=0.1,
-    nve_per_atom=True,
-    nve_loss_mode="total_energy",
-    nve_dt_fs=0.5,
+    rollout_dt_fs=0.5,
     delta_learning=False,
     baseline_epsilon_eV=0.01,
     baseline_sigma_A=1.0,
@@ -848,18 +711,8 @@ def train_physics_informed_model(
         "ema_alpha_y": 1.0,
         "ema_alpha_neg_dy": 1.0,
         "momentum_weight": momentum_weight,
-        "nve_weight": nve_weight,
         "pbc_weight": pbc_weight,
-        "traj_length": traj_length,
-        "nve_freq": nve_freq,
-        "nve_warmup_epochs": nve_warmup_epochs,
-        "nve_ramp_epochs": nve_ramp_epochs,
-        "nve_relative": bool(nve_relative),
-        "nve_relative_eps": float(nve_relative_eps),
-        "nve_drift_scale_eV": float(nve_drift_scale_eV),
-        "nve_per_atom": bool(nve_per_atom),
-        "nve_loss_mode": str(nve_loss_mode),
-        "nve_dt_fs": float(nve_dt_fs),
+        "rollout_dt_fs": float(rollout_dt_fs),
         "val_rollout_steps": int(val_rollout_steps),
         "val_rollout_count": int(val_rollout_count),
         "val_rollout_energy_log_stride": int(val_rollout_energy_log_stride),
@@ -884,23 +737,25 @@ def train_physics_informed_model(
 
     # PhysicsInformedLNNP includes both delta label handling and physics losses.
     model = PhysicsInformedLNNP(model_args)
-    model.trajectory_dataset = full_dataset
-    model.trajectory_start_indices = _contiguous_train_starts(train_data, traj_length)
     model.validation_dataset = full_dataset
     model.validation_eval_indices = _evenly_sample_indices(sorted(int(idx) for idx in val_data.indices), val_static_eval_count)
     model.validation_rollout_start_indices = _evenly_sample_indices(_contiguous_subset_starts(val_data, required_span=2), val_rollout_count)
     model.rollout_probe_dataset = full_dataset
     model.train_rollout_probe_start_indices = _evenly_sample_indices(_contiguous_subset_starts(train_data, required_span=2), train_rollout_probe_count)
 
+    # Model selection uses the same metric as train_standard_model so every ablation
+    # cell (absolute/momentum/delta/delta+momentum) is picked by an identical
+    # criterion. val_rollout_score is still computed/logged each epoch (see
+    # PhysicsInformedLNNP.on_validation_epoch_end) purely as a diagnostic.
     checkpoint_callback = ModelCheckpoint(
-        monitor="val_rollout_score",
+        monitor="val_total_mse_loss",
         dirpath=save_dir,
         filename=checkpoint_name,
         save_top_k=1,
         mode="min",
         save_last=True,
     )
-    early_stop = EarlyStopping(monitor="val_rollout_score", patience=30, mode="min")
+    early_stop = EarlyStopping(monitor="val_total_mse_loss", patience=30, mode="min")
     history_callback = MetricHistoryCallback(save_dir, checkpoint_name)
     logger = TensorBoardLogger(save_dir=log_dir, name="physics_informed")
     trainer_callbacks = list(trainer_callbacks or [])
@@ -933,7 +788,7 @@ def train_physics_informed_model(
     val_metrics = dict(fit_metrics)
     val_metrics.update({f"post_test.{key}": value for key, value in test_callback_metrics.items()})
     if best_model_score is not None:
-        val_metrics.setdefault("val_rollout_score", best_model_score)
+        val_metrics.setdefault("val_total_mse_loss", best_model_score)
 
     config = {
         "model_args": model_args,
@@ -961,22 +816,14 @@ def train_physics_informed_model(
         "test_results": test_results[0] if test_results else None,
         "physics_weights": {
             "momentum": momentum_weight,
-            "nve": nve_weight,
             "pbc": pbc_weight,
         },
-        "physics_schedule": {
-            "nve_freq": nve_freq,
-            "nve_warmup_epochs": nve_warmup_epochs,
-            "nve_ramp_epochs": nve_ramp_epochs,
-            "nve_relative": bool(nve_relative),
-            "nve_relative_eps": float(nve_relative_eps),
-            "nve_drift_scale_eV": float(nve_drift_scale_eV),
-            "nve_per_atom": bool(nve_per_atom),
-            "nve_loss_mode": str(nve_loss_mode),
-            "nve_dt_fs": float(nve_dt_fs),
-        },
         "rollout_validation": {
-            "monitor_metric": "val_rollout_score",
+            # val_rollout_score is logged every epoch as a diagnostic but is not the
+            # checkpoint-selection criterion (see checkpoint_callback above).
+            "monitor_metric": "val_total_mse_loss",
+            "diagnostic_only_metric": "val_rollout_score",
+            "rollout_dt_fs": float(rollout_dt_fs),
             "val_rollout_steps": int(val_rollout_steps),
             "val_rollout_count": int(val_rollout_count),
             "val_rollout_energy_log_stride": int(val_rollout_energy_log_stride),
@@ -1013,21 +860,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--momentum-weight", type=float, default=0.01)
-    parser.add_argument("--nve-weight", type=float, default=0.01)
-    parser.add_argument("--traj-length", type=int, default=100)
-    parser.add_argument("--nve-freq", type=int, default=50)
-    parser.add_argument("--nve-warmup-epochs", type=int, default=5)
-    parser.add_argument("--nve-ramp-epochs", type=int, default=20)
-    parser.add_argument("--nve-relative", dest="nve_relative", action="store_true")
-    parser.add_argument("--nve-absolute", dest="nve_relative", action="store_false")
-    parser.set_defaults(nve_relative=False)
-    parser.add_argument("--nve-relative-eps", type=float, default=1e-6)
-    parser.add_argument("--nve-drift-scale-ev", type=float, default=0.1)
-    parser.add_argument("--nve-per-atom", dest="nve_per_atom", action="store_true")
-    parser.add_argument("--nve-total-drift", dest="nve_per_atom", action="store_false")
-    parser.set_defaults(nve_per_atom=True)
-    parser.add_argument("--nve-loss-mode", type=str, default="total_energy", choices=["total_energy", "potential_only"])
-    parser.add_argument("--nve-dt-fs", type=float, default=0.5)
+    parser.add_argument("--rollout-dt-fs", type=float, default=0.5, help="Timestep for diagnostic-only model-driven rollouts (not part of any loss).")
     parser.add_argument("--val-rollout-steps", type=int, default=250)
     parser.add_argument("--val-rollout-count", type=int, default=6)
     parser.add_argument("--val-rollout-energy-log-stride", type=int, default=10)
@@ -1053,17 +886,7 @@ if __name__ == "__main__":
         num_epochs=args.epochs,
         lr=args.lr,
         momentum_weight=args.momentum_weight,
-        nve_weight=args.nve_weight,
-        traj_length=args.traj_length,
-        nve_freq=args.nve_freq,
-        nve_warmup_epochs=args.nve_warmup_epochs,
-        nve_ramp_epochs=args.nve_ramp_epochs,
-        nve_relative=args.nve_relative,
-        nve_relative_eps=args.nve_relative_eps,
-        nve_drift_scale_eV=args.nve_drift_scale_ev,
-        nve_per_atom=args.nve_per_atom,
-        nve_loss_mode=args.nve_loss_mode,
-        nve_dt_fs=args.nve_dt_fs,
+        rollout_dt_fs=args.rollout_dt_fs,
         val_rollout_steps=args.val_rollout_steps,
         val_rollout_count=args.val_rollout_count,
         val_rollout_energy_log_stride=args.val_rollout_energy_log_stride,

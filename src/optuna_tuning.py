@@ -364,11 +364,6 @@ class StudyRunner:
             for key, spec in search_space.get("delta", {}).items():
                 sampled[key] = _sample_param(trial, key, spec)
 
-        nve_weight = sampled.get("nve_weight", fixed.get("nve_weight", 0.0))
-        if self.config["mode"] == "physics" and float(nve_weight) > 0:
-            for key, spec in search_space.get("nve", {}).items():
-                sampled[key] = _sample_param(trial, key, spec)
-
         return sampled
 
     def _build_training_kwargs(self, trial, trial_dir: Path):
