@@ -200,7 +200,7 @@ def parse_args():
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output-dir", type=str, required=True)
     parser.add_argument("--steps", type=int, default=5000)
-    parser.add_argument("--dt", type=float, default=0.1)
+    parser.add_argument("--dt", type=float, default=0.5)  # matches MD17's native 0.5 fs frame spacing
     parser.add_argument("--n-rollouts", type=int, default=10)
     parser.add_argument("--energy-log-stride", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)

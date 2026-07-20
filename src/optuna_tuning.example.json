@@ -47,7 +47,7 @@
     "num_rbf": 64,
     "energy_weight": 0.05,
     "force_weight": 0.95,
-    "rollout_dt_fs": 0.1,
+    "rollout_dt_fs": 0.5,
     "train_loss": "mse_loss",
     "train_loss_arg": null,
     "pbc_weight": 0.0

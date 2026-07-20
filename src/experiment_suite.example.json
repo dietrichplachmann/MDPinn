@@ -31,7 +31,7 @@
     "run_rollout": false,
     "physics_overrides": {
       "momentum_weight": 0.0,
-      "rollout_dt_fs": 0.1,
+      "rollout_dt_fs": 0.5,
       "val_rollout_steps": 250,
       "val_rollout_count": 6,
       "val_rollout_energy_log_stride": 10,
@@ -61,7 +61,7 @@
     ],
     "rollout": {
       "steps": 5000,
-      "dt": 0.1,
+      "dt": 0.5,
       "n_rollouts": 10,
       "seed": 42,
       "energy_log_stride": 20,
@@ -120,7 +120,7 @@
           "num_rbf": 64,
           "energy_weight": 0.05,
           "force_weight": 0.95,
-          "rollout_dt_fs": 0.1,
+          "rollout_dt_fs": 0.5,
           "val_rollout_steps": 250,
           "val_rollout_count": 6,
           "val_rollout_energy_log_stride": 10,

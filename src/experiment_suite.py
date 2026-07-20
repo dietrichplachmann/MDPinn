@@ -327,7 +327,7 @@ def _finalize_optuna_experiment(experiment_name, experiment_cfg, exp_dir, study)
             molecule=molecule,
             data_root=rollout_cfg.get("data_root", "./data"),
             steps=int(rollout_cfg.get("steps", 5000)),
-            dt=float(rollout_cfg.get("dt", 0.1)),
+            dt=float(rollout_cfg.get("dt", 0.5)),  # matches MD17's native 0.5 fs frame spacing
             n_rollouts=int(rollout_cfg.get("n_rollouts", 10)),
             seed=int(rollout_cfg.get("seed", 42)),
             device=device,
@@ -347,7 +347,7 @@ def _finalize_optuna_experiment(experiment_name, experiment_cfg, exp_dir, study)
                 molecule=molecule,
                 data_root=rollout_cfg.get("data_root", "./data"),
                 steps=int(rollout_cfg.get("steps", 5000)),
-                dt=float(rollout_cfg.get("dt", 0.1)),
+                dt=float(rollout_cfg.get("dt", 0.5)),  # matches MD17's native 0.5 fs frame spacing
                 n_rollouts=int(rollout_cfg.get("n_rollouts", 10)),
                 seed=int(rollout_cfg.get("seed", 42)),
                 device=device,
@@ -868,7 +868,7 @@ def main():
                     molecule=molecule,
                     data_root=rollout_cfg.get("data_root", "./data"),
                     steps=int(rollout_cfg.get("steps", 5000)),
-                    dt=float(rollout_cfg.get("dt", 0.1)),
+                    dt=float(rollout_cfg.get("dt", 0.5)),  # matches MD17's native 0.5 fs frame spacing
                     n_rollouts=int(rollout_cfg.get("n_rollouts", 10)),
                     seed=int(rollout_cfg.get("seed", 42)),
                     device=device,
@@ -880,7 +880,7 @@ def main():
                     molecule=molecule,
                     data_root=rollout_cfg.get("data_root", "./data"),
                     steps=int(rollout_cfg.get("steps", 5000)),
-                    dt=float(rollout_cfg.get("dt", 0.1)),
+                    dt=float(rollout_cfg.get("dt", 0.5)),  # matches MD17's native 0.5 fs frame spacing
                     n_rollouts=int(rollout_cfg.get("n_rollouts", 10)),
                     seed=int(rollout_cfg.get("seed", 42)),
                     device=device,

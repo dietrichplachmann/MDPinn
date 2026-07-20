@@ -82,7 +82,13 @@ FIXED_HPARAMS = dict(
 )
 
 ROLLOUT_STEPS = 5000
-ROLLOUT_DT_FS = 0.1
+# 0.5 fs, not 0.1: MD17's native frame spacing is documented at 0.5 fs (Chmiela et al.
+# 2017, Science Advances), and v0 = (x1-x0)/dt in rollout_nve.py assumes dt matches
+# that spacing. Using 0.1 here would reconstruct v0 ~5x too large (~25x too much
+# kinetic energy), injecting a model-independent artifact into every rollout's
+# reported drift - which would explain why every prior standard-vs-physics
+# comparison in this project showed no real separation.
+ROLLOUT_DT_FS = 0.5
 N_ROLLOUTS = 10
 ROLLOUT_ENERGY_LOG_STRIDE = 20
 REFERENCE_WINDOW_FRAMES = 200  # frames of reference MD17 trajectory used for the

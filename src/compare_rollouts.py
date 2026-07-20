@@ -171,7 +171,7 @@ def parse_args():
     parser.add_argument("--molecule", type=str, default="aspirin")
     parser.add_argument("--data-root", type=str, default="./data")
     parser.add_argument("--steps", type=int, default=5000)
-    parser.add_argument("--dt", type=float, default=0.1)
+    parser.add_argument("--dt", type=float, default=0.5)  # matches MD17's native 0.5 fs frame spacing
     parser.add_argument("--n-rollouts", type=int, default=100)
     parser.add_argument("--energy-log-stride", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
@@ -189,7 +189,7 @@ def run_rollout_comparison(
     molecule="aspirin",
     data_root="./data",
     steps=5000,
-    dt=0.1,
+    dt=0.5,  # matches MD17's native 0.5 fs frame spacing
     n_rollouts=100,
     energy_log_stride=20,
     seed=42,
