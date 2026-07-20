@@ -14,7 +14,7 @@ functions that already exist elsewhere in this repo:
   (epochs/steps/wall-clock to a shared accuracy threshold) comparisons.
 
 Every ablation cell shares: the same training entrypoint, the same
-checkpoint-selection metric (val_total_mse_loss), and the same fixed
+checkpoint-selection metric (val_force_mae), and the same fixed
 architecture/optimizer hyperparameters - only delta_learning and
 momentum_weight vary - so whatever difference shows up in the summary table is
 attributable to the loss/architecture choice, not a confound.
@@ -256,7 +256,7 @@ def _write_raw_results_csv(rows, path):
     print(f"Wrote: {path}")
 
 
-def compute_convergence_speed(rows, threshold_condition="absolute", metric_key="val_total_mse_loss"):
+def compute_convergence_speed(rows, threshold_condition="absolute", metric_key="val_force_mae"):
     """Add epochs/steps/wall-seconds-to-threshold to each row, in place.
 
     The shared threshold per molecule is the best `metric_key` value the

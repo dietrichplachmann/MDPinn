@@ -481,6 +481,12 @@ class PhysicsInformedLNNP(DeltaLNNP):
         }
 
     def on_validation_epoch_end(self):
+        # Call the base LNNP hook first so its own epoch-level bookkeeping/logging
+        # (e.g. val_total_mse_loss and friends) still happens - overriding this hook
+        # without calling super() was silently dropping those metrics, which is what
+        # made monitor="val_total_mse_loss" crash with "metric ... not available"
+        # even though validation clearly ran.
+        super().on_validation_epoch_end()
         if self.trainer is None or self.trainer.sanity_checking:
             return
 
@@ -516,6 +522,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
             print(f"Warning: rollout-aware validation metrics failed: {exc}")
 
     def on_train_epoch_end(self):
+        super().on_train_epoch_end()
         if self.trainer is None or self.trainer.sanity_checking:
             return
 
@@ -743,19 +750,26 @@ def train_physics_informed_model(
     model.rollout_probe_dataset = full_dataset
     model.train_rollout_probe_start_indices = _evenly_sample_indices(_contiguous_subset_starts(train_data, required_span=2), train_rollout_probe_count)
 
-    # Model selection uses the same metric as train_standard_model so every ablation
-    # cell (absolute/momentum/delta/delta+momentum) is picked by an identical
-    # criterion. val_rollout_score is still computed/logged each epoch (see
-    # PhysicsInformedLNNP.on_validation_epoch_end) purely as a diagnostic.
+    # Model selection uses val_force_mae, logged by _evaluate_static_guardrails in
+    # PhysicsInformedLNNP.on_validation_epoch_end. This (not val_total_mse_loss) is
+    # the right shared criterion for this ablation: _evaluate_static_guardrails
+    # always reconstructs *absolute* energy/forces via _predict_absolute_energy_forces
+    # regardless of delta_learning, so val_force_mae means the same physical thing
+    # (force MAE in eV/A on held-out frames) in every condition. val_total_mse_loss,
+    # by contrast, is computed against whatever labels are in batch.y/batch.neg_dy at
+    # validation time - which DeltaLNNP.data_transform residualizes in delta mode - so
+    # it isn't actually comparable between absolute and delta runs even where it is
+    # available. val_rollout_score is still computed/logged each epoch purely as a
+    # diagnostic, not used for selection.
     checkpoint_callback = ModelCheckpoint(
-        monitor="val_total_mse_loss",
+        monitor="val_force_mae",
         dirpath=save_dir,
         filename=checkpoint_name,
         save_top_k=1,
         mode="min",
         save_last=True,
     )
-    early_stop = EarlyStopping(monitor="val_total_mse_loss", patience=30, mode="min")
+    early_stop = EarlyStopping(monitor="val_force_mae", patience=30, mode="min")
     history_callback = MetricHistoryCallback(save_dir, checkpoint_name)
     logger = TensorBoardLogger(save_dir=log_dir, name="physics_informed")
     trainer_callbacks = list(trainer_callbacks or [])
@@ -788,7 +802,7 @@ def train_physics_informed_model(
     val_metrics = dict(fit_metrics)
     val_metrics.update({f"post_test.{key}": value for key, value in test_callback_metrics.items()})
     if best_model_score is not None:
-        val_metrics.setdefault("val_total_mse_loss", best_model_score)
+        val_metrics.setdefault("val_force_mae", best_model_score)
 
     config = {
         "model_args": model_args,
@@ -821,7 +835,7 @@ def train_physics_informed_model(
         "rollout_validation": {
             # val_rollout_score is logged every epoch as a diagnostic but is not the
             # checkpoint-selection criterion (see checkpoint_callback above).
-            "monitor_metric": "val_total_mse_loss",
+            "monitor_metric": "val_force_mae",
             "diagnostic_only_metric": "val_rollout_score",
             "rollout_dt_fs": float(rollout_dt_fs),
             "val_rollout_steps": int(val_rollout_steps),
