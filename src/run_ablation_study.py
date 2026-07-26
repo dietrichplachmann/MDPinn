@@ -34,6 +34,7 @@ import argparse
 import csv
 import json
 import statistics
+import traceback
 from pathlib import Path
 
 import torch
@@ -128,9 +129,14 @@ def _condition_is_valid_for_molecule(condition_kwargs, molecule):
     return True
 
 
-def _run_training(molecule, condition_name, condition_kwargs, seed, num_epochs):
+def _run_training(molecule, condition_name, condition_kwargs, seed, num_epochs, force_retrain=False):
     save_dir = CHECKPOINT_ROOT / molecule / condition_name / f"seed{seed}"
     log_dir = LOG_ROOT / molecule / condition_name / f"seed{seed}"
+    ckpt_path = save_dir / "best_model.ckpt"
+    if ckpt_path.exists() and not force_retrain:
+        print(f"  Checkpoint already exists at {ckpt_path} - skipping training "
+              "(pass --force-retrain to redo it anyway).")
+        return save_dir
     hparams = dict(FIXED_HPARAMS)
     hparams["num_epochs"] = num_epochs
     train_physics_informed_model(
@@ -221,34 +227,63 @@ def _evaluate_checkpoint(molecule, save_dir, seed):
     }
 
 
-def run_matrix(molecules, conditions, seeds, num_epochs):
+def run_matrix(molecules, conditions, seeds, num_epochs, force_retrain=False):
     """Train+evaluate every valid (molecule, condition, seed) cell.
 
-    Returns the list of raw per-run result dicts, including each run's
-    `history_rows` (needed by `compute_convergence_speed`). Does not write
-    the CSV itself - see `main()`, which writes it once convergence-speed
-    columns have been filled in.
+    Resilient to a single cell failing: any exception from training or
+    evaluation is caught (with a full traceback printed) and recorded against
+    that cell, and the matrix continues with the next cell rather than
+    aborting the whole run. `raw_results.csv` is rewritten after every
+    successfully completed cell, not just once at the end - a later failure
+    should never lose already-completed cells' results the way it did before
+    this was added (run_matrix previously only persisted anything after the
+    entire matrix finished, so a mid-run crash discarded every already-trained
+    and already-evaluated cell's numbers).
+
+    Training itself is resumable: `_run_training` skips any cell whose
+    `best_model.ckpt` already exists unless `force_retrain=True`, so re-running
+    this after a partial failure does not redo already-completed (and often
+    multi-hour) training runs.
+
+    Returns (rows, failed_cells) - rows include each run's `history_rows`
+    (needed by `compute_convergence_speed`), failed_cells is a list of
+    "molecule/condition/seedN" strings that raised an exception.
     """
     rows = []
     skipped = []
+    failed = []
     for molecule in molecules:
         for condition_name, condition_kwargs in conditions.items():
             if not _condition_is_valid_for_molecule(condition_kwargs, molecule):
                 skipped.append((molecule, condition_name))
                 continue
             for seed in seeds:
-                print(f"\n=== {molecule} / {condition_name} / seed={seed} ===")
-                save_dir = _run_training(molecule, condition_name, condition_kwargs, seed, num_epochs)
-                metrics = _evaluate_checkpoint(molecule, save_dir, seed)
+                cell = f"{molecule}/{condition_name}/seed{seed}"
+                print(f"\n=== {cell} ===")
+                try:
+                    save_dir = _run_training(
+                        molecule, condition_name, condition_kwargs, seed, num_epochs, force_retrain=force_retrain
+                    )
+                    metrics = _evaluate_checkpoint(molecule, save_dir, seed)
+                except Exception as exc:
+                    print(f"FAILED: {cell}: {exc}")
+                    traceback.print_exc()
+                    failed.append(cell)
+                    continue
                 row = {"molecule": molecule, "condition": condition_name, "seed": seed, **metrics}
                 rows.append(row)
+                _write_raw_results_csv(rows, RAW_RESULTS_CSV)
 
     if skipped:
         print("\nSkipped cells (no analytic baseline for this molecule):")
         for molecule, condition_name in skipped:
             print(f"  {molecule} / {condition_name}")
+    if failed:
+        print("\nFailed cells (full tracebacks above) - fix and re-run; already-completed cells above are safe:")
+        for cell in failed:
+            print(f"  {cell}")
 
-    return rows
+    return rows, failed
 
 
 def _write_raw_results_csv(rows, path):
@@ -377,6 +412,13 @@ def main():
         help="1 molecule (aspirin), 1 condition (absolute), 1 seed, 2 epochs - "
         "confirm the plumbing end-to-end before running the full matrix.",
     )
+    parser.add_argument(
+        "--force-retrain",
+        action="store_true",
+        help="Retrain every cell even if checkpoints/ablation/.../best_model.ckpt already exists. "
+        "Default is to skip and reuse existing checkpoints, so re-running after a partial "
+        "failure only trains the cells that didn't finish last time.",
+    )
     args = parser.parse_args()
 
     if args.smoke_test:
@@ -384,10 +426,13 @@ def main():
     else:
         molecules, conditions, seeds, num_epochs = MOLECULES, CONDITIONS, SEEDS, FIXED_HPARAMS["num_epochs"]
 
-    rows = run_matrix(molecules, conditions, seeds, num_epochs)
+    rows, failed_cells = run_matrix(molecules, conditions, seeds, num_epochs, force_retrain=args.force_retrain)
     rows = compute_convergence_speed(rows)
     _write_raw_results_csv(rows, RAW_RESULTS_CSV)  # rewrite with convergence-speed columns filled in
     aggregate_results(rows)
+    if failed_cells:
+        print(f"\n{len(failed_cells)} cell(s) failed and are NOT in the results above: {failed_cells}")
+        print("Fix the underlying issue and re-run - completed cells will be skipped, not redone.")
 
 
 if __name__ == "__main__":

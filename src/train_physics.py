@@ -13,6 +13,7 @@ Chemist view:
 """
 
 import json
+import traceback
 from pathlib import Path
 from collections import Counter
 from statistics import median
@@ -287,6 +288,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
 
         except Exception as exc:
             print(f"Warning: physics loss computation failed: {exc}")
+            traceback.print_exc()
 
         return total_loss
 
@@ -520,6 +522,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
                 self.log("val_rollout_fail_no_valid_start_count", float(rollout_metrics["fail_reasons"].get("no_valid_rollout_start", 0)), on_step=False, on_epoch=True)
         except Exception as exc:
             print(f"Warning: rollout-aware validation metrics failed: {exc}")
+            traceback.print_exc()
 
     def on_train_epoch_end(self):
         super().on_train_epoch_end()
@@ -541,6 +544,7 @@ class PhysicsInformedLNNP(DeltaLNNP):
                 self.log("train_short_rollout_success_count", float(probe_metrics["success_count"]), on_step=False, on_epoch=True)
         except Exception as exc:
             print(f"Warning: short-rollout probe metrics failed: {exc}")
+            traceback.print_exc()
 
     def _extract_box_lengths(self, box, graph_idx):
         """Extract orthorhombic box lengths (Lx,Ly,Lz) for one graph if available."""
@@ -769,7 +773,12 @@ def train_physics_informed_model(
         mode="min",
         save_last=True,
     )
-    early_stop = EarlyStopping(monitor="val_force_mae", patience=30, mode="min")
+    # strict=False: if val_force_mae is transiently missing for one epoch (e.g. an
+    # exception inside _evaluate_static_guardrails that got caught and warned about
+    # rather than crashing the run), skip that epoch's early-stopping check instead
+    # of raising - we'd rather lose one epoch's early-stopping decision than the
+    # whole multi-hour training run.
+    early_stop = EarlyStopping(monitor="val_force_mae", patience=30, mode="min", strict=False)
     history_callback = MetricHistoryCallback(save_dir, checkpoint_name)
     logger = TensorBoardLogger(save_dir=log_dir, name="physics_informed")
     trainer_callbacks = list(trainer_callbacks or [])
