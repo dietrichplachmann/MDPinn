@@ -31,10 +31,42 @@ import random
 
 from torch.utils.data import Subset
 
+# CODATA 2018 atomic-unit conversion factors. The raw dataset_1593.xyz shipped
+# in the WaterBox download is a hand-serialized dump of native CP2K/Quickstep
+# AIMD output (Bohr/Hartree throughout) wearing a quippy-style extended-xyz
+# header (Properties=/Lattice=/nneightol=) - it was never actually converted
+# to the Angstrom/eV convention that header style normally implies. Confirmed
+# empirically (2026-07-31): the raw Lattice diagonal (23.465) only matches the
+# physically expected ~12.42 A box size for 64 liquid-density water molecules
+# after x0.529177 (Bohr->A); the same factor turns the nearest O-H neighbor
+# distances into real bond lengths (~0.98-1.12 A). Force magnitudes only land
+# in the physically normal ~1-3 eV/A range for a thermally-sampled AIMD frame
+# after the matching Hartree/Bohr->eV/A conversion - read directly as eV/A
+# they're implausibly small (looks like a relaxed structure, not a liquid
+# ensemble). See project_mdpinn.md for the full derivation.
+_BOHR_TO_ANGSTROM = 0.529177210903
+_HARTREE_TO_EV = 27.211386245988
+_HARTREE_PER_BOHR_TO_EV_PER_ANGSTROM = _HARTREE_TO_EV / _BOHR_TO_ANGSTROM
+
+
+def _convert_atomic_units_to_ev_angstrom(data):
+    """Per-sample transform: rescale a raw WaterBox Data object from the
+    dataset's native Bohr/Hartree units to the Angstrom/eV convention every
+    other part of this codebase (MD17, structural_metrics, physics_losses)
+    assumes."""
+    data.pos = data.pos * _BOHR_TO_ANGSTROM
+    box = getattr(data, "box", None)
+    if box is not None:
+        data.box = box * _BOHR_TO_ANGSTROM
+    data.y = data.y * _HARTREE_TO_EV
+    data.neg_dy = data.neg_dy * _HARTREE_PER_BOHR_TO_EV_PER_ANGSTROM
+    return data
+
 
 def load_waterbox_dataset(data_root: str = "./data"):
-    """Load the WaterBox dataset. Raises ImportError with a clear message if
-    the installed torchmdnet version doesn't expose this dataset class."""
+    """Load the WaterBox dataset, converted to Angstrom/eV. Raises ImportError
+    with a clear message if the installed torchmdnet version doesn't expose
+    this dataset class."""
     try:
         from torchmdnet.datasets import WaterBox
     except ImportError as exc:
@@ -52,7 +84,7 @@ def load_waterbox_dataset(data_root: str = "./data"):
     # patching the installed package.
     WaterBox.url = "https://archive.materialscloud.org/records/eg3pn-1fw83/files/training-set.zip?download=1"
 
-    return WaterBox(root=data_root)
+    return WaterBox(root=data_root, transform=_convert_atomic_units_to_ev_angstrom)
 
 
 def random_split(dataset, train_frac: float = 0.8, val_frac: float = 0.1, seed: int = 42):
