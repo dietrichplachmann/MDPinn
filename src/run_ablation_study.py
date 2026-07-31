@@ -60,15 +60,27 @@ from training_history import find_convergence_point
 CONDITIONS = {
     "absolute": dict(delta_learning=False, momentum_weight=0.0),
     "absolute+momentum": dict(delta_learning=False, momentum_weight=0.01),
-    "delta": dict(delta_learning=True, momentum_weight=0.0),
-    "delta+momentum": dict(delta_learning=True, momentum_weight=0.01),
+    #"delta": dict(delta_learning=True, momentum_weight=0.0),
+    #"delta+momentum": dict(delta_learning=True, momentum_weight=0.01),
 }
 
 # Swap freely - verify these are valid torchmdnet.datasets.MD17 molecule keys on
 # your training environment first. delta/delta+momentum are automatically skipped
 # for any molecule without an analytic baseline (currently aspirin only).
 MOLECULES = ["aspirin", "benzene", "ethanol"]
-SEEDS = [0, 1, 2]
+
+# Per-molecule seed counts, not one global list: aspirin gets more seeds (8 total -
+# 5 beyond the 3 already trained) since it's the molecule this study centers on and
+# already has partial data; benzene/ethanol get a first-pass 3 seeds each rather than
+# also going to 8, which would multiply the cost of the least-characterized part of
+# the run for comparatively little payoff. _run_training's resume-if-checkpoint-exists
+# logic means re-running only trains what's actually new (aspirin seeds 3-7; all of
+# benzene/ethanol).
+SEEDS_BY_MOLECULE = {
+    "aspirin": [0, 1, 2, 3, 4, 5, 6, 7],
+    "benzene": [0, 1, 2],
+    "ethanol": [0, 1, 2],
+}
 
 # Fixed architecture/optimizer hyperparameters, reused from the existing best
 # aspirin run (checkpoints/standard/config.json) rather than re-swept per cell -
@@ -227,8 +239,13 @@ def _evaluate_checkpoint(molecule, save_dir, seed):
     }
 
 
-def run_matrix(molecules, conditions, seeds, num_epochs, force_retrain=False):
+def run_matrix(molecules, conditions, seeds_by_molecule, num_epochs, force_retrain=False):
     """Train+evaluate every valid (molecule, condition, seed) cell.
+
+    `seeds_by_molecule` is a dict mapping molecule -> list of seeds, not one
+    global list, so different molecules can get different seed counts (e.g.
+    more seeds for the molecule the study centers on, fewer for a first-pass
+    cross-molecule check).
 
     Resilient to a single cell failing: any exception from training or
     evaluation is caught (with a full traceback printed) and recorded against
@@ -257,7 +274,7 @@ def run_matrix(molecules, conditions, seeds, num_epochs, force_retrain=False):
             if not _condition_is_valid_for_molecule(condition_kwargs, molecule):
                 skipped.append((molecule, condition_name))
                 continue
-            for seed in seeds:
+            for seed in seeds_by_molecule[molecule]:
                 cell = f"{molecule}/{condition_name}/seed{seed}"
                 print(f"\n=== {cell} ===")
                 try:
@@ -422,11 +439,17 @@ def main():
     args = parser.parse_args()
 
     if args.smoke_test:
-        molecules, conditions, seeds, num_epochs = ["aspirin"], {"absolute": CONDITIONS["absolute"]}, [0], 2
+        molecules = ["aspirin"]
+        conditions = {"absolute": CONDITIONS["absolute"]}
+        seeds_by_molecule = {"aspirin": [0]}
+        num_epochs = 2
     else:
-        molecules, conditions, seeds, num_epochs = MOLECULES, CONDITIONS, SEEDS, FIXED_HPARAMS["num_epochs"]
+        molecules = MOLECULES
+        conditions = CONDITIONS
+        seeds_by_molecule = SEEDS_BY_MOLECULE
+        num_epochs = FIXED_HPARAMS["num_epochs"]
 
-    rows, failed_cells = run_matrix(molecules, conditions, seeds, num_epochs, force_retrain=args.force_retrain)
+    rows, failed_cells = run_matrix(molecules, conditions, seeds_by_molecule, num_epochs, force_retrain=args.force_retrain)
     rows = compute_convergence_speed(rows)
     _write_raw_results_csv(rows, RAW_RESULTS_CSV)  # rewrite with convergence-speed columns filled in
     aggregate_results(rows)

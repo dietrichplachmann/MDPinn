@@ -122,3 +122,60 @@ def bond_length_deviation_summary(
         "frac_frames_any_bond_out_of_band": frac_frames_any_bond_out_of_band,
         "structural_stability_score": frac_frames_any_bond_out_of_band,
     }
+
+
+def infer_molecule_groups(z: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+    """Assign each atom to a molecule via connected components over inferred bonds.
+
+    For a periodic multi-molecule system (e.g. a water box), this is what makes
+    a *per-molecule* momentum-conservation check possible: `infer_bonds` (via
+    `baseline_potential._infer_bonds_from_positions`) is distance/valence based
+    and molecule-agnostic, so running connected-components over its output
+    groups atoms into individual molecules regardless of what order the dataset
+    happens to store atoms in - it does NOT assume atoms are stored in
+    contiguous per-molecule blocks, which is not guaranteed by any dataset here.
+
+    Returns a (N,) long tensor of group ids in [0, num_groups). Atoms with no
+    inferred bond to anything else form their own singleton group.
+    """
+    n_atoms = z.shape[0]
+    bonds = infer_bonds(z, pos)
+
+    parent = list(range(n_atoms))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i, j):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[ri] = rj
+
+    for i, j in bonds:
+        union(i, j)
+
+    roots = [find(i) for i in range(n_atoms)]
+    unique_roots = sorted(set(roots))
+    root_to_group = {root: idx for idx, root in enumerate(unique_roots)}
+    group_ids = [root_to_group[r] for r in roots]
+
+    return torch.tensor(group_ids, dtype=torch.long)
+
+
+def summarize_molecule_groups(z: torch.Tensor, group_ids: torch.Tensor) -> dict:
+    """Per-group atomic-number composition, for sanity-checking a grouping before
+    trusting it anywhere else (e.g. asserting every water molecule works out to
+    exactly {O: 1, H: 2}, not some other split caused by a missed/spurious bond).
+    """
+    from collections import Counter
+
+    n_groups = int(group_ids.max().item()) + 1 if group_ids.numel() else 0
+    compositions = []
+    for g in range(n_groups):
+        mask = group_ids == g
+        zs = z[mask].tolist()
+        compositions.append(dict(Counter(zs)))
+    return {"n_groups": n_groups, "compositions": compositions}

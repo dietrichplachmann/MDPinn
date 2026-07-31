@@ -1,0 +1,363 @@
+#!/usr/bin/env python
+"""Physics-informed training on a periodic liquid-water box.
+
+Deliberately narrower in scope than train_physics.py - see the project plan
+("MDPinn: Periodic water-box study") for the full rationale:
+- No delta-learning: no water analytic baseline is built (baseline_potential.py
+  is aspirin-specific and its unvectorized O(N^2) nonbonded loop is exactly the
+  kind of thing that made delta-learning intractable on aspirin - not worth
+  reproducing at 192 atoms instead of 21).
+- No NVE/rollout diagnostics: rollout_nve.py has no periodic-boundary handling
+  today, so no rollout probes run during training here. The actual metric this
+  study cares about - per-molecule momentum violation - is measured on static
+  held-out configurations by run_waterbox_study.py's evaluation step instead.
+
+Two conditions:
+- water_absolute: momentum_weight=0 - plain supervised energy/force loss, same
+  0.05/0.95 energy/force weighting convention as everywhere else in this repo.
+- water_absolute+momentum: momentum_weight>0 - adds a per-INDIVIDUAL-MOLECULE
+  momentum-conservation penalty (physics_losses.per_fragment_momentum_loss),
+  not a per-whole-box penalty. Checking momentum conservation per molecule
+  rather than per whole system is the entire point of this study: a whole
+  periodic box's net force is already guaranteed ~0 by the same equivariance
+  argument that made this loss redundant on a single isolated aspirin molecule,
+  but an individual water molecule being pushed by its neighbors is not
+  guaranteed to have zero net force/torque on it, so this is a genuinely
+  different (non-redundant) test.
+
+IMPORTANT - written without torchmdnet installed locally (see waterbox_data.py's
+docstring): the WaterBox dataset's constructor/attribute names are taken from
+torchmd-net's public source, not verified against an installed copy. Run the
+--smoke-test path first and watch for errors before trusting anything else here.
+"""
+
+from __future__ import annotations
+
+import json
+import traceback
+from pathlib import Path
+
+import torch
+import lightning.pytorch as pl
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+from lightning.pytorch.loggers import TensorBoardLogger
+from torch_geometric.loader import DataLoader as GeometricDataLoader
+
+from torchmdnet.module import LNNP
+
+from physics_losses import build_global_molecule_ids, per_fragment_momentum_loss
+from structural_metrics import infer_molecule_groups, summarize_molecule_groups
+from training_history import MetricHistoryCallback
+from waterbox_data import load_waterbox_dataset, random_split
+
+
+# PyTorch 2.7 checkpoint compatibility (matches train_physics.py/train_standard.py).
+_original_load = torch.load
+torch.load = lambda *args, **kwargs: _original_load(*args, **{**kwargs, "weights_only": False})
+
+
+class WaterLNNP(LNNP):
+    """Plain-supervised LNNP plus an optional per-molecule momentum penalty.
+
+    Does not override on_validation_epoch_end/on_train_epoch_end at all (unlike
+    PhysicsInformedLNNP in train_physics.py), so the base LNNP's own validation
+    logging (val_total_mse_loss and friends) works exactly as it does in the
+    plain train_standard.py path - no risk of the missing-super()-call bug that
+    broke val_total_mse_loss there earlier in this project.
+    """
+
+    def __init__(self, hparams, local_molecule_ids, num_molecules_per_system, **kwargs):
+        super().__init__(hparams, **kwargs)
+        self.momentum_weight = float(hparams.get("momentum_weight", 0.0))
+        self.register_buffer("local_molecule_ids", local_molecule_ids.clone())
+        self.num_molecules_per_system = int(num_molecules_per_system)
+        self.atoms_per_system = int(local_molecule_ids.shape[0])
+
+    def _global_molecule_ids_for_batch(self, batch):
+        n_atoms = batch.z.shape[0]
+        # Every WaterBox sample has the same fixed atom count/order (one system,
+        # different geometries), and torch_geometric's default collation
+        # concatenates same-sized graphs' nodes in order without reordering
+        # within a graph - so atom i's position within its own graph is
+        # i % atoms_per_system. This would need revisiting for a dataset with a
+        # variable number of atoms per sample.
+        local_atom_idx = torch.arange(n_atoms, device=batch.z.device) % self.atoms_per_system
+        local_ids = self.local_molecule_ids.to(batch.z.device)[local_atom_idx]
+        return build_global_molecule_ids(batch.batch, local_ids, self.num_molecules_per_system)
+
+    def step(self, batch, loss_fn_list, stage):
+        total_loss = super().step(batch, loss_fn_list, stage)
+
+        # Gated entirely behind momentum_weight > 0, unlike train_physics.py's
+        # PhysicsInformedLNNP (which pays for an extra forward pass every batch
+        # regardless of momentum_weight) - water_absolute (momentum_weight=0)
+        # should cost nothing beyond the base supervised loss.
+        if stage != "train" or self.momentum_weight <= 0:
+            return total_loss
+
+        try:
+            batch.pos = batch.pos.clone().detach().requires_grad_(True)
+            _, neg_dy = self(
+                batch.z,
+                batch.pos,
+                batch=batch.batch,
+                box=batch.box if "box" in batch else None,
+            )
+            molecule_ids = self._global_molecule_ids_for_batch(batch)
+            num_molecules_in_batch = int(molecule_ids.max().item()) + 1
+            loss_momentum = per_fragment_momentum_loss(batch.pos, neg_dy, molecule_ids, num_molecules_in_batch)
+
+            weighted_momentum = self.momentum_weight * loss_momentum
+            self.log("train_loss_momentum_per_molecule", loss_momentum, on_step=False, on_epoch=True)
+            self.log("train_loss_momentum_per_molecule_weighted", weighted_momentum, on_step=False, on_epoch=True)
+            total_loss = total_loss + weighted_momentum
+            self.log("train_total_with_momentum", total_loss, on_step=False, on_epoch=True, prog_bar=True)
+        except Exception as exc:
+            print(f"Warning: per-molecule momentum loss failed: {exc}")
+            traceback.print_exc()
+
+        return total_loss
+
+
+def _build_local_molecule_ids(full_dataset):
+    """Infer per-atom molecule ids once from a representative frame, and sanity
+    check the grouping before trusting it anywhere (see the project plan: a
+    silent mis-grouping wouldn't crash, it would just make the momentum loss
+    meaningless)."""
+    sample = full_dataset[0]
+    group_ids = infer_molecule_groups(sample.z, sample.pos)
+    summary = summarize_molecule_groups(sample.z, group_ids)
+
+    bad_groups = [c for c in summary["compositions"] if c != {8: 1, 1: 2}]
+    print(f"infer_molecule_groups: {summary['n_groups']} groups from {sample.z.shape[0]} atoms")
+    if bad_groups:
+        raise ValueError(
+            f"Expected every group to be exactly {{O: 1, H: 2}} (atomic numbers 8/1) for a "
+            f"water box; got {len(bad_groups)} group(s) that don't match, e.g. {bad_groups[:3]}. "
+            "Do not proceed - the momentum loss would be meaningless with a wrong grouping."
+        )
+
+    return group_ids, summary["n_groups"]
+
+
+def train_waterbox_model(
+    data_root="./data",
+    batch_size=32,
+    num_epochs=20,
+    lr=1e-4,
+    model_type="tensornet",
+    save_dir="checkpoints/waterbox",
+    log_dir="logs/waterbox",
+    force_weight=0.95,
+    energy_weight=0.05,
+    momentum_weight=0.0,
+    embedding_dimension=256,
+    num_layers=6,
+    num_rbf=64,
+    checkpoint_name="best_model",
+    train_loss="mse_loss",
+    train_loss_arg=None,
+    weight_decay=0.0,
+    lr_patience=15,
+    lr_min=1e-7,
+    lr_factor=0.8,
+    num_workers=4,
+    seed=42,
+    trainer_callbacks=None,
+    trainer_kwargs=None,
+):
+    """Train a water-box model (absolute-mode only - no delta-learning here).
+
+    momentum_weight=0.0 is the "water_absolute" condition; momentum_weight>0 is
+    "water_absolute+momentum" - see module docstring for what that term checks.
+    """
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+
+    print("\n" + "=" * 70)
+    print("Water-Box Training")
+    print("=" * 70)
+    print(f"model={model_type}, momentum_weight={momentum_weight}")
+
+    pl.seed_everything(seed, workers=True)
+
+    full_dataset = load_waterbox_dataset(data_root=data_root)
+    print(f"Loaded WaterBox: {len(full_dataset)} configurations")
+    train_data, val_data, test_data = random_split(full_dataset, seed=seed)
+
+    local_molecule_ids, num_molecules_per_system = _build_local_molecule_ids(full_dataset)
+
+    train_loader = GeometricDataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    val_loader = GeometricDataLoader(val_data, batch_size=batch_size, num_workers=num_workers)
+    test_loader = GeometricDataLoader(test_data, batch_size=batch_size, num_workers=num_workers)
+
+    model_args = {
+        "model": model_type,
+        "prior_model": None,
+        "output_model": "Scalar",
+        "load_model": None,
+        "remove_ref_energy": False,
+        "train_loss": train_loss,
+        "train_loss_arg": train_loss_arg,
+        "charge": False,
+        "spin": False,
+        "precision": 32,
+        "cutoff_lower": 0.0,
+        "cutoff_upper": 5.0,
+        "embedding_dimension": int(embedding_dimension),
+        "num_layers": int(num_layers),
+        "num_rbf": int(num_rbf),
+        "rbf_type": "expnorm",
+        "trainable_rbf": False,
+        "activation": "silu",
+        "max_z": 100,
+        "max_num_neighbors": 128,
+        "derivative": True,
+        "lr": lr,
+        "lr_patience": lr_patience,
+        "lr_min": lr_min,
+        "lr_factor": lr_factor,
+        "lr_warmup_steps": 0,
+        "weight_decay": weight_decay,
+        "y_weight": energy_weight,
+        "neg_dy_weight": force_weight,
+        "ema_alpha_y": 1.0,
+        "ema_alpha_neg_dy": 1.0,
+        "momentum_weight": momentum_weight,
+        # Left unset (None): WaterBox provides box vectors per sample already
+        # (batch.box), which per TorchMD-Net's own docs is an alternative to
+        # setting a single fixed box_vecs hparam for the whole dataset - NOT
+        # verified locally (no torchmdnet installed here), confirm on the
+        # training box that periodicity is actually active (e.g. check that
+        # neighbor search respects the box) before trusting results.
+        "box_vecs": None,
+        "atom_filter": -1,
+        "reduce_op": "add",
+        "equivariance_invariance_group": "O(3)",
+        "check_errors": True,
+        "static_shapes": False,
+        "vector_cutoff": False,
+        "aggr": "add",
+        "neighbor_embedding": True,
+        "attn_activation": "silu",
+        "num_heads": 8,
+        "distance_influence": "both",
+    }
+
+    model = WaterLNNP(model_args, local_molecule_ids=local_molecule_ids, num_molecules_per_system=num_molecules_per_system)
+
+    # Both conditions are absolute-mode only (no delta-learning), so
+    # val_total_mse_loss means the same thing in both - no confound between
+    # water_absolute and water_absolute+momentum the way there would be if one
+    # used a residualized target and the other didn't.
+    checkpoint_callback = ModelCheckpoint(
+        monitor="val_total_mse_loss",
+        dirpath=save_dir,
+        filename=checkpoint_name,
+        save_top_k=1,
+        mode="min",
+        save_last=True,
+    )
+    early_stop = EarlyStopping(monitor="val_total_mse_loss", patience=30, mode="min", strict=False)
+    history_callback = MetricHistoryCallback(save_dir, checkpoint_name)
+    logger = TensorBoardLogger(save_dir=log_dir, name="waterbox")
+    trainer_callbacks = list(trainer_callbacks or [])
+    trainer_kwargs = dict(trainer_kwargs or {})
+
+    trainer = pl.Trainer(
+        max_epochs=num_epochs,
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        devices=1,
+        callbacks=[checkpoint_callback, early_stop, history_callback, *trainer_callbacks],
+        logger=logger,
+        log_every_n_steps=10,
+        gradient_clip_val=1000.0,
+        inference_mode=False,
+        **trainer_kwargs,
+    )
+
+    print("Starting training...")
+    trainer.fit(model, train_loader, val_loader)
+    fit_metrics = {key: float(value.item()) for key, value in trainer.callback_metrics.items() if hasattr(value, "item")}
+
+    print("Testing best checkpoint...")
+    test_results = trainer.test(model, test_loader, ckpt_path="best")
+    test_callback_metrics = {
+        key: float(value.item()) for key, value in trainer.callback_metrics.items() if hasattr(value, "item")
+    }
+    best_model_score = checkpoint_callback.best_model_score
+    best_model_score = float(best_model_score.item()) if best_model_score is not None else None
+    best_model_path = checkpoint_callback.best_model_path or str(Path(save_dir) / f"{checkpoint_name}.ckpt")
+    val_metrics = dict(fit_metrics)
+    val_metrics.update({f"post_test.{key}": value for key, value in test_callback_metrics.items()})
+    if best_model_score is not None:
+        val_metrics.setdefault("val_total_mse_loss", best_model_score)
+
+    config = {
+        "model_args": model_args,
+        "training": {
+            "batch_size": batch_size,
+            "num_epochs": num_epochs,
+            "lr": lr,
+            "seed": seed,
+            "weight_decay": weight_decay,
+            "train_loss": train_loss,
+            "train_loss_arg": train_loss_arg,
+            "momentum_weight": momentum_weight,
+        },
+        "num_molecules_per_system": num_molecules_per_system,
+        "validation_metrics": val_metrics,
+        "history_paths": {
+            "json": str(Path(save_dir) / f"{checkpoint_name}_history.json"),
+            "csv": str(Path(save_dir) / f"{checkpoint_name}_history.csv"),
+            "plot": str(Path(save_dir) / f"{checkpoint_name}_history.png"),
+            "plot_no_epoch0": str(Path(save_dir) / f"{checkpoint_name}_history_no_epoch0.png"),
+        },
+        "best_model_path": best_model_path,
+        "best_model_score": best_model_score,
+        "test_results": test_results[0] if test_results else None,
+    }
+
+    with open(Path(save_dir) / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+
+    print(f"Training complete. Model: {save_dir}/{checkpoint_name}.ckpt")
+    return {
+        "trainer": trainer,
+        "model": model,
+        "test_results": test_results,
+        "best_model_path": best_model_path,
+        "best_model_score": best_model_score,
+        "validation_metrics": val_metrics,
+        "config": config,
+    }
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-root", type=str, default="./data")
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--momentum-weight", type=float, default=0.0)
+    parser.add_argument("--embedding-dimension", type=int, default=256)
+    parser.add_argument("--num-layers", type=int, default=6)
+    parser.add_argument("--num-rbf", type=int, default=64)
+    parser.add_argument("--checkpoint-name", type=str, default="best_model")
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+
+    train_waterbox_model(
+        data_root=args.data_root,
+        batch_size=args.batch_size,
+        num_epochs=args.epochs,
+        lr=args.lr,
+        momentum_weight=args.momentum_weight,
+        embedding_dimension=args.embedding_dimension,
+        num_layers=args.num_layers,
+        num_rbf=args.num_rbf,
+        checkpoint_name=args.checkpoint_name,
+        seed=args.seed,
+    )

@@ -97,6 +97,88 @@ def momentum_symmetry_loss(R, F_pred):
     return linear_term + angular_term
 
 
+def build_global_molecule_ids(batch_index: torch.Tensor, local_molecule_ids: torch.Tensor, num_molecules_per_system: int) -> torch.Tensor:
+    """Combine a per-graph batch index with per-atom local molecule ids into one
+    global molecule-id tensor spanning an entire mini-batch of identical-topology
+    systems (e.g. several water-box frames in one batch).
+
+    Args:
+        batch_index: (N,) which graph (0..batch_size-1) each atom belongs to
+            (torch_geometric's standard `batch.batch`).
+        local_molecule_ids: (N,) which molecule *within its own graph* each atom
+            belongs to, already repeated/tiled to length N (one value per atom
+            in the whole mini-batch, not just per single system) - see
+            structural_metrics.infer_molecule_groups for how to build the
+            per-system version this gets tiled from.
+        num_molecules_per_system: molecule count in a single graph/system.
+
+    Returns:
+        (N,) long tensor of global molecule ids in [0, batch_size * num_molecules_per_system).
+    """
+    return batch_index * num_molecules_per_system + local_molecule_ids
+
+
+def per_fragment_momentum_loss(
+    pos: torch.Tensor,
+    F_pred: torch.Tensor,
+    molecule_ids: torch.Tensor,
+    num_molecules: int,
+) -> torch.Tensor:
+    """Vectorized momentum_symmetry_loss, computed per-molecule across potentially
+    many molecules per training example (e.g. 64 water molecules in one periodic
+    box), instead of per whole training example.
+
+    This is the version that matters for a multi-fragment system: architecture
+    equivariance guarantees zero net force/torque for a whole isolated system
+    (see momentum_symmetry_loss's docstring), but does NOT guarantee it for an
+    arbitrary sub-fragment of a larger system that is exchanging momentum with
+    its neighbors (e.g. one water molecule being pushed by hydrogen bonding to
+    the rest of the box) - so this is a genuine, non-redundant physical prior in
+    that setting, unlike the whole-graph version on a single isolated molecule.
+
+    Uses index_add_ (scatter-style) rather than a Python loop over molecules -
+    looping per-molecule in Python here would reproduce the exact kind of
+    unvectorized-hot-loop cost that made delta-learning intractable on aspirin
+    (see baseline_potential.py / the project notes on the ~50h/epoch blowup),
+    just at the scale of hundreds to thousands of molecules per batch instead of
+    hundreds of bonded terms per molecule.
+
+    Args:
+        pos: (N, 3) positions for every atom in the (possibly multi-graph) batch.
+        F_pred: (N, 3) predicted forces, same ordering as pos.
+        molecule_ids: (N,) global molecule id per atom, see build_global_molecule_ids.
+        num_molecules: total number of distinct molecules across the whole batch
+            (i.e. molecule_ids.max() + 1).
+
+    Returns:
+        Scalar loss: mean over molecules of (||sum F||^2 + ||sum r x F||^2) / atoms_in_molecule.
+    """
+    device = pos.device
+    dtype = pos.dtype
+
+    ones = torch.ones(pos.shape[0], device=device, dtype=dtype)
+    counts = torch.zeros(num_molecules, device=device, dtype=dtype)
+    counts.index_add_(0, molecule_ids, ones)
+    counts = counts.clamp(min=1)
+
+    F_sum = torch.zeros(num_molecules, 3, device=device, dtype=dtype)
+    F_sum.index_add_(0, molecule_ids, F_pred)
+    linear_term = (F_sum ** 2).sum(dim=1)  # (num_molecules,)
+
+    pos_sum = torch.zeros(num_molecules, 3, device=device, dtype=dtype)
+    pos_sum.index_add_(0, molecule_ids, pos)
+    centroid = pos_sum / counts.unsqueeze(1)
+
+    pos_centered = pos - centroid[molecule_ids]
+    torque_i = torch.cross(pos_centered, F_pred, dim=1)
+    T_sum = torch.zeros(num_molecules, 3, device=device, dtype=dtype)
+    T_sum.index_add_(0, molecule_ids, torque_i)
+    angular_term = (T_sum ** 2).sum(dim=1)  # (num_molecules,)
+
+    loss_per_molecule = (linear_term + angular_term) / counts
+    return loss_per_molecule.mean()
+
+
 # ============================================================================
 # NVE ENERGY CONSERVATION LOSS (Requires trajectory data)
 # ============================================================================
