@@ -50,7 +50,7 @@ def load_waterbox_dataset(data_root: str = "./data"):
     # short-ID URLs. Same dataset, same record (2018.0020/v1, Cheng et al.,
     # DOI 10.24435/materialscloud:2018.0020/v1), current address instead of
     # patching the installed package.
-    WaterBox.url = "https://www.materialscloud.org/records/eg3pn-1fw83/files/training-set.zip?download=1"
+    WaterBox.url = "https://archive.materialscloud.org/records/eg3pn-1fw83/files/training-set.zip?download=1"
 
     return WaterBox(root=data_root)
 
