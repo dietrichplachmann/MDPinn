@@ -15,15 +15,24 @@ import torch
 from baseline_potential import _infer_bonds_from_positions
 
 
-def infer_bonds(z: torch.Tensor, pos: torch.Tensor) -> list[tuple[int, int]]:
+def infer_bonds(z: torch.Tensor, pos: torch.Tensor, box: torch.Tensor | None = None) -> list[tuple[int, int]]:
     """Return a bond list (atom index pairs) inferred from one equilibrium geometry.
 
     Thin wrapper around baseline_potential._infer_bonds_from_positions, which is
     distance/valence based (not topology-file based), so this works for any MD17
     molecule, not just aspirin.
+
+    box: optional (3,3) or (1,3,3) periodic box matrix (e.g. WaterBox's `box`
+    field). When given, bond distances use the minimum-image convention -
+    required for periodic systems, where a bonded pair can straddle a box
+    face. Only the diagonal is used (this codebase's periodic data is
+    orthorhombic); pass None for non-periodic systems like MD17.
     """
     z_signature = tuple(int(v) for v in z.detach().cpu().tolist())
-    return _infer_bonds_from_positions(z_signature, pos.detach().cpu())
+    box_lengths = None
+    if box is not None:
+        box_lengths = torch.as_tensor(box).reshape(3, 3).diagonal().detach().cpu()
+    return _infer_bonds_from_positions(z_signature, pos.detach().cpu(), box_lengths=box_lengths)
 
 
 def bond_length_series(bonds: list[tuple[int, int]], pos_traj) -> torch.Tensor:
@@ -124,7 +133,7 @@ def bond_length_deviation_summary(
     }
 
 
-def infer_molecule_groups(z: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+def infer_molecule_groups(z: torch.Tensor, pos: torch.Tensor, box: torch.Tensor | None = None) -> torch.Tensor:
     """Assign each atom to a molecule via connected components over inferred bonds.
 
     For a periodic multi-molecule system (e.g. a water box), this is what makes
@@ -135,11 +144,15 @@ def infer_molecule_groups(z: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
     happens to store atoms in - it does NOT assume atoms are stored in
     contiguous per-molecule blocks, which is not guaranteed by any dataset here.
 
+    box: optional periodic box (see `infer_bonds`) - pass the sample's `box`
+    for periodic multi-molecule systems so bonds crossing a box face are still
+    detected via the minimum-image convention.
+
     Returns a (N,) long tensor of group ids in [0, num_groups). Atoms with no
     inferred bond to anything else form their own singleton group.
     """
     n_atoms = z.shape[0]
-    bonds = infer_bonds(z, pos)
+    bonds = infer_bonds(z, pos, box=box)
 
     parent = list(range(n_atoms))
 

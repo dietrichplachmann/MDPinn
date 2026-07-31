@@ -87,7 +87,7 @@ def evaluate_waterbox_checkpoint(checkpoint_path, data_root="./data", device=Non
     _, _, test_data = random_split(full_dataset, seed=seed)
 
     sample0 = full_dataset[0]
-    local_molecule_ids = infer_molecule_groups(sample0.z, sample0.pos)
+    local_molecule_ids = infer_molecule_groups(sample0.z, sample0.pos, box=getattr(sample0, "box", None))
     summary = summarize_molecule_groups(sample0.z, local_molecule_ids)
     num_molecules_per_system = summary["n_groups"]
     local_molecule_ids = local_molecule_ids.to(device)

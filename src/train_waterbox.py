@@ -125,7 +125,7 @@ def _build_local_molecule_ids(full_dataset):
     silent mis-grouping wouldn't crash, it would just make the momentum loss
     meaningless)."""
     sample = full_dataset[0]
-    group_ids = infer_molecule_groups(sample.z, sample.pos)
+    group_ids = infer_molecule_groups(sample.z, sample.pos, box=getattr(sample, "box", None))
     summary = summarize_molecule_groups(sample.z, group_ids)
 
     bad_groups = [c for c in summary["compositions"] if c != {8: 1, 1: 2}]

@@ -396,7 +396,15 @@ def _load_aspirin_forcefield() -> dict:
     }
 
 
-def _infer_bonds_from_positions(z: tuple[int, ...], pos: torch.Tensor) -> list[tuple[int, int]]:
+def _infer_bonds_from_positions(
+    z: tuple[int, ...], pos: torch.Tensor, box_lengths: torch.Tensor | None = None
+) -> list[tuple[int, int]]:
+    """box_lengths: optional (3,) orthorhombic box side lengths. When given,
+    pairwise distances use the minimum-image convention instead of raw
+    Euclidean distance - required for periodic multi-molecule systems (e.g.
+    the water-box study), where a bonded pair can sit on opposite faces of the
+    box and otherwise look far apart. None (default) preserves the original
+    non-periodic behavior used for MD17's single-molecule trajectories."""
     n_atoms = len(z)
     candidates = []
     for i in range(n_atoms):
@@ -404,7 +412,10 @@ def _infer_bonds_from_positions(z: tuple[int, ...], pos: torch.Tensor) -> list[t
         for j in range(i + 1, n_atoms):
             zj = z[j]
             threshold = 1.25 * (_covalent_radius_by_z(zi) + _covalent_radius_by_z(zj))
-            dist = float(torch.linalg.norm(pos[i] - pos[j]).item())
+            delta = pos[i] - pos[j]
+            if box_lengths is not None:
+                delta = delta - box_lengths * torch.round(delta / box_lengths)
+            dist = float(torch.linalg.norm(delta).item())
             if dist <= threshold:
                 candidates.append((dist, i, j))
 
