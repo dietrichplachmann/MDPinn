@@ -45,6 +45,13 @@ def load_waterbox_dataset(data_root: str = "./data"):
             "check the installed version supports it before debugging further."
         ) from exc
 
+    # torchmdnet's shipped download URL (Materials Cloud's old record_id= API)
+    # 404s - that endpoint was retired when Materials Cloud migrated to
+    # short-ID URLs. Same dataset, same record (2018.0020/v1, Cheng et al.,
+    # DOI 10.24435/materialscloud:2018.0020/v1), current address instead of
+    # patching the installed package.
+    WaterBox.url = "https://www.materialscloud.org/records/eg3pn-1fw83/files/training-set.zip?download=1"
+
     return WaterBox(root=data_root)
 
 
