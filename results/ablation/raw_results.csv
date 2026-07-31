@@ -1,0 +1,7 @@
+molecule,condition,seed,energy_mae,force_mae,energy_drift_mean,rollout_mean_max_abs_drift_eV,rollout_mean_final_drift_eV,rollout_failure_rate,structural_stability_score,final_epoch,total_wall_seconds,epochs_to_threshold,global_step_to_threshold,wall_seconds_to_threshold
+aspirin,absolute,0,1.8676851987838745,3.726170539855957,6.19884375,,,1.0,,18.0,52278.039695190266,,,
+aspirin,absolute,1,0.4213371276855469,0.806588351726532,5.34303125,,,1.0,,18.0,52384.38924693875,,,
+aspirin,absolute,2,0.40210339426994324,0.8999853730201721,5.9821875,,,1.0,,18.0,52477.608072647825,,,
+aspirin,absolute+momentum,0,0.483981728553772,0.9965689778327942,5.5405625,,,1.0,,18.0,77766.04827387398,,,
+aspirin,absolute+momentum,1,0.45087388157844543,1.0026508569717407,6.798937499999999,,,1.0,,18.0,77572.71005472122,,,
+aspirin,absolute+momentum,2,0.5714291930198669,1.0913443565368652,5.48740625,,,1.0,,18.0,77350.936574589,,,
