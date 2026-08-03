@@ -38,8 +38,19 @@ SEEDS = [0, 1, 2]
 # than re-tuned - this study's independent variable is the momentum loss, not
 # hyperparameters. WaterBox has far fewer total configurations (~1593) than
 # MD17 aspirin (~211k), so 20 epochs here is a much smaller undertaking.
+#
+# batch_size is NOT reused from aspirin (was 32 there) - each WaterBox example
+# is a 192-atom periodic system with real liquid-density local connectivity,
+# vs. aspirin's 21-atom molecule with a sparse bond graph. TensorNet represents
+# each edge as an (embedding_dimension x 3 x 3) tensor, so at batch_size=32
+# with a 5.0 A cutoff this dataset produces enough edges to need ~45 GB for a
+# single forward+backward pass at momentum_weight=0.0 (confirmed via CUDA OOM
+# on the training box, 2026-07-31) - and water_absolute+momentum roughly
+# doubles that (a second full forward+autograd pass per train step, see
+# train_waterbox.py's WaterLNNP.step). 4 leaves headroom for that worst case
+# on a 48 GB card; raise cautiously and only after confirming memory use.
 FIXED_HPARAMS = dict(
-    batch_size=32,
+    batch_size=4,
     num_epochs=20,
     lr=1e-4,
     embedding_dimension=256,
