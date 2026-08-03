@@ -1,0 +1,2 @@
+cumulative_wall_seconds,epoch,epoch_wall_seconds,global_step,lr,train_neg_dy_mse_loss,train_total_mse_loss,train_y_mse_loss,val_neg_dy_l1_loss,val_neg_dy_mse_loss,val_total_l1_loss,val_total_mse_loss,val_y_l1_loss,val_y_mse_loss
+514.5317257633433,0.0,514.5317257633433,80,9.999999747378752e-05,3.723069906234741,39909824.0,798196352.0,1.2011809349060059,3.4960808753967285,1270.234375,32211966.0,25381.86328125,644239232.0

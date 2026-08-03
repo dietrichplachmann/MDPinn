@@ -1,0 +1,2 @@
+condition,n_seeds,energy_mae_mean,energy_mae_std,force_mae_mean,force_mae_std,mean_per_molecule_momentum_violation_mean,mean_per_molecule_momentum_violation_std,max_per_molecule_momentum_violation_mean,max_per_molecule_momentum_violation_std,final_epoch_mean,final_epoch_std,total_wall_seconds_mean,total_wall_seconds_std
+water_absolute,1,16056.324597167968,0.0,2.9636472560465337,0.0,126.17275757193565,0.0,1262.179931640625,0.0,0.0,0.0,514.5317257633433,0.0

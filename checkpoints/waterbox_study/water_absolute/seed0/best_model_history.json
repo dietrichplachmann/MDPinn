@@ -1,0 +1,18 @@
+[
+  {
+    "epoch": 0.0,
+    "global_step": 80,
+    "lr": 9.999999747378752e-05,
+    "train_total_mse_loss": 39909824.0,
+    "val_total_l1_loss": 1270.234375,
+    "val_total_mse_loss": 32211966.0,
+    "train_y_mse_loss": 798196352.0,
+    "val_y_l1_loss": 25381.86328125,
+    "val_y_mse_loss": 644239232.0,
+    "train_neg_dy_mse_loss": 3.723069906234741,
+    "val_neg_dy_l1_loss": 1.2011809349060059,
+    "val_neg_dy_mse_loss": 3.4960808753967285,
+    "cumulative_wall_seconds": 514.5317257633433,
+    "epoch_wall_seconds": 514.5317257633433
+  }
+]
