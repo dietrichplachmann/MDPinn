@@ -39,23 +39,35 @@ SEEDS = [0, 1, 2]
 # hyperparameters. WaterBox has far fewer total configurations (~1593) than
 # MD17 aspirin (~211k), so 20 epochs here is a much smaller undertaking.
 #
-# batch_size is NOT reused from aspirin (was 32 there) - each WaterBox example
-# is a 192-atom periodic system with real liquid-density local connectivity,
-# vs. aspirin's 21-atom molecule with a sparse bond graph. TensorNet represents
-# each edge as an (embedding_dimension x 3 x 3) tensor, so at batch_size=32
-# with a 5.0 A cutoff this dataset produces enough edges to need ~45 GB for a
-# single forward+backward pass at momentum_weight=0.0 (confirmed via CUDA OOM
-# on the training box, 2026-07-31) - and water_absolute+momentum roughly
-# doubles that (a second full forward+autograd pass per train step, see
-# train_waterbox.py's WaterLNNP.step). 4 leaves headroom for that worst case
-# on a 48 GB card; raise cautiously and only after confirming memory use.
+# batch_size (the real per-forward-pass batch, which is what drives GPU peak
+# memory) is NOT reused from aspirin (was 32 there) - each WaterBox example is
+# a 192-atom periodic system with real liquid-density local connectivity, vs.
+# aspirin's 21-atom molecule with a sparse bond graph. TensorNet represents
+# each edge as an (embedding_dimension x 3 x 3) tensor, so at a 5.0 A cutoff
+# this dataset produces far more edges per example than aspirin ever did.
+# Confirmed via CUDA OOM on the training box (2026-07-31, RTX 6000 Ada 48GB):
+# batch_size=32 needed ~45 GB for a single pass; batch_size=4 STILL wasn't
+# enough - it trained fine for 267/319 steps of epoch 0 before an unusually
+# dense batch (more real neighbor pairs within cutoff than a typical one -
+# max_num_neighbors=128, also unchanged from aspirin, allows this swing)
+# needed 378 MiB more than was left. PyTorch's allocator never releases
+# reserved memory mid-run, so the ceiling is set by the worst batch seen so
+# far - not something one epoch's worth of running is guaranteed to expose the
+# true worst case of. batch_size=2 leaves ~2x the margin batch_size=4 had (and
+# 4 was only ~99% full), which should cover realistic tail variance.
+#
+# accumulate_grad_batches=16 recovers the aspirin-matched effective batch size
+# (2 x 16 = 32) for the optimizer, so this is purely a memory-footprint fix,
+# not a silent change to the optimization dynamics the "reused, not re-tuned"
+# comment above was relying on.
 FIXED_HPARAMS = dict(
-    batch_size=4,
+    batch_size=2,
     num_epochs=20,
     lr=1e-4,
     embedding_dimension=256,
     num_layers=6,
     num_rbf=64,
+    trainer_kwargs=dict(accumulate_grad_batches=16),
 )
 
 CHECKPOINT_ROOT = Path("checkpoints/waterbox_study")
