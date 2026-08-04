@@ -34,6 +34,25 @@ CONDITIONS = {
 }
 SEEDS = [0, 1, 2]
 
+# Memory-footprint overrides, NOT part of the experiment design (that's
+# CONDITIONS above) - kept separate so the science (momentum_weight) and the
+# engineering (what fits in GPU memory) don't get conflated in one dict.
+# water_absolute+momentum runs a SECOND full forward+backward pass every train
+# step (WaterLNNP.step's momentum branch, gated behind momentum_weight>0) on
+# top of the base supervised pass, roughly doubling per-step peak memory.
+# Confirmed via CUDA OOM on the training box (2026-07-31): all 3 seeds of
+# water_absolute+momentum OOM'd at FIXED_HPARAMS's batch_size=2 (which was
+# only validated against water_absolute's single-pass workload). Halving to
+# batch_size=1 restores roughly the same per-pass memory margin batch_size=2
+# gave the single-pass condition; accumulate_grad_batches=32 (vs. 16) keeps
+# the same effective batch of 32 for the optimizer.
+CONDITION_HPARAM_OVERRIDES = {
+    "water_absolute+momentum": dict(
+        batch_size=1,
+        trainer_kwargs=dict(accumulate_grad_batches=32),
+    ),
+}
+
 # Same architecture/optimizer defaults as the aspirin ablation, reused rather
 # than re-tuned - this study's independent variable is the momentum loss, not
 # hyperparameters. WaterBox has far fewer total configurations (~1593) than
@@ -98,6 +117,7 @@ def _run_training(condition_name, condition_kwargs, seed, num_epochs, force_retr
 
     hparams = dict(FIXED_HPARAMS)
     hparams["num_epochs"] = num_epochs
+    hparams.update(CONDITION_HPARAM_OVERRIDES.get(condition_name, {}))
     train_waterbox_model(
         save_dir=str(save_dir),
         log_dir=str(log_dir),
