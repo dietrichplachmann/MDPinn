@@ -11,4 +11,4 @@ treat a difference as real only if it clears roughly 1 std of both conditions.
 
 | condition | n_seeds | energy_mae | force_mae | mean_per_molecule_momentum_violation | max_per_molecule_momentum_violation | final_epoch | total_wall_seconds |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| water_absolute | 1 | 1.606e+04 +/- 0 | 2.964 +/- 0 | 126.2 +/- 0 | 1262 +/- 0 | 0 +/- 0 | 514.5 +/- 0 |
+| water_absolute | 3 | 8.919 +/- 6.6 | 1.256 +/- 1.1 | 81.41 +/- 64 | 1859 +/- 1e+03 | 18 +/- 0 | 5132 +/- 8.1 |
