@@ -81,12 +81,48 @@ CONDITION_HPARAM_OVERRIDES = {
 # comment above was relying on.
 FIXED_HPARAMS = dict(
     batch_size=2,
-    num_epochs=20,
+    num_epochs=50,
+    # Extended from the original 20 epochs (2026-08-04) to check whether the
+    # wild epoch-to-epoch oscillation in val_total_mse_loss (seen across every
+    # seed of both conditions) eventually settles with more training, rather
+    # than being a stable feature of these dynamics. early_stop_patience=40
+    # gives far more room than the 30-epoch default (which was only ever inert
+    # by coincidence, since it exceeded the old 20-epoch total) - but at 40 <
+    # 50 it is NOT structurally guaranteed to avoid triggering: one seed
+    # already went 15 straight non-improving epochs within just a 20-epoch
+    # run, so a 40-epoch plateau within 50 epochs is a real possibility, not
+    # a hypothetical. If a run stops noticeably before epoch 50, check
+    # final_epoch before assuming the full trajectory was observed.
+    early_stop_patience=40,
     lr=1e-4,
     embedding_dimension=256,
     num_layers=6,
     num_rbf=64,
     trainer_kwargs=dict(accumulate_grad_batches=16),
+    # Energy/force loss-weight annealing (added 2026-08-04), motivated by
+    # this study's own results: energy oscillated wildly across every seed of
+    # both conditions while force stayed comparatively well-behaved under the
+    # fixed 0.05/0.95 (energy/force) weighting used for the whole run - a
+    # plausible contributor, since force gets 19x the gradient signal energy
+    # does, for the entire run, with nothing ever correcting for it. Current
+    # practice in MACE and NequIP addresses exactly this by annealing the
+    # weighting during training rather than holding it fixed: force-dominant
+    # early to fix the local force/gradient shape, then switching to
+    # energy-dominant later specifically to fix up absolute energy
+    # calibration (Batatia et al. 2022, MACE, arXiv:2206.07697 - one reported
+    # schedule uses energy:force 1:100 for the first ~75% of training, then
+    # 300:100 for the rest; a related MACE recipe reports force-dominant for
+    # ~60% of training then switching to energy-dominant; Batzner et al. 2022,
+    # NequIP, Nat. Commun. - energy:force 40:1000 early, flipped at a fixed
+    # epoch). anneal_epoch=30 is 60% of this run's 50 epochs, matching that
+    # reported MACE timing convention. post_anneal weights (0.75/0.25,
+    # energy:force = 3:1) mirror the ~3:1 energy:force ratio of MACE's
+    # reported final-phase weights (300:100), kept in this project's existing
+    # normalized-to-1 convention rather than switching to MACE's raw
+    # (unnormalized) weight scale.
+    anneal_epoch=30,
+    post_anneal_energy_weight=0.75,
+    post_anneal_force_weight=0.25,
 )
 
 CHECKPOINT_ROOT = Path("checkpoints/waterbox_study")

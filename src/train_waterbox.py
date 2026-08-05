@@ -66,12 +66,60 @@ class WaterLNNP(LNNP):
     broke val_total_mse_loss there earlier in this project.
     """
 
-    def __init__(self, hparams, local_molecule_ids, num_molecules_per_system, **kwargs):
+    def __init__(
+        self,
+        hparams,
+        local_molecule_ids,
+        num_molecules_per_system,
+        anneal_epoch=None,
+        post_anneal_energy_weight=None,
+        post_anneal_force_weight=None,
+        **kwargs,
+    ):
         super().__init__(hparams, **kwargs)
         self.momentum_weight = float(hparams.get("momentum_weight", 0.0))
         self.register_buffer("local_molecule_ids", local_molecule_ids.clone())
         self.num_molecules_per_system = int(num_molecules_per_system)
         self.atoms_per_system = int(local_molecule_ids.shape[0])
+
+        # Energy/force loss-weight annealing (see train_waterbox_model's
+        # docstring for citations). anneal_epoch=None (default) preserves the
+        # original fixed-weight behavior exactly.
+        self.anneal_epoch = anneal_epoch
+        self.post_anneal_energy_weight = post_anneal_energy_weight
+        self.post_anneal_force_weight = post_anneal_force_weight
+        self._pre_anneal_y_weight = float(self.hparams.y_weight)
+        self._pre_anneal_neg_dy_weight = float(self.hparams.neg_dy_weight)
+        self._annealed = False
+
+    def on_train_epoch_start(self):
+        super().on_train_epoch_start()
+        if self.anneal_epoch is None or self._annealed:
+            return
+        if self.current_epoch < self.anneal_epoch:
+            return
+        # LNNP.step() reads self.hparams.y_weight/neg_dy_weight fresh on every
+        # call (not cached at construction), so mutating them here takes
+        # effect starting with this epoch's very first training batch.
+        self.hparams.y_weight = self.post_anneal_energy_weight
+        self.hparams.neg_dy_weight = self.post_anneal_force_weight
+        self._annealed = True
+        print(
+            f"[weight anneal] epoch {self.current_epoch}: switching "
+            f"y_weight {self._pre_anneal_y_weight} -> {self.post_anneal_energy_weight}, "
+            f"neg_dy_weight {self._pre_anneal_neg_dy_weight} -> {self.post_anneal_force_weight}"
+        )
+
+    def on_train_epoch_end(self):
+        # MUST call super() first - LNNP's own on_train_epoch_end logs base
+        # training metrics; skipping this previously broke val_total_mse_loss
+        # logging elsewhere in this project (see CLAUDE.md's lessons-learned).
+        super().on_train_epoch_end()
+        # Logged (not just printed) so it lands in best_model_history.csv via
+        # MetricHistoryCallback, making the schedule directly visible/
+        # verifiable in the same place as every other training curve.
+        self.log("train_y_weight", float(self.hparams.y_weight), on_step=False, on_epoch=True)
+        self.log("train_neg_dy_weight", float(self.hparams.neg_dy_weight), on_step=False, on_epoch=True)
 
     def _global_molecule_ids_for_batch(self, batch):
         n_atoms = batch.z.shape[0]
@@ -161,12 +209,27 @@ def train_waterbox_model(
     lr_patience=15,
     lr_min=1e-7,
     lr_factor=0.8,
+    early_stop_patience=30,
     num_workers=4,
     seed=42,
+    anneal_epoch=None,
+    post_anneal_energy_weight=None,
+    post_anneal_force_weight=None,
     trainer_callbacks=None,
     trainer_kwargs=None,
 ):
     """Train a water-box model (absolute-mode only - no delta-learning here).
+
+    anneal_epoch/post_anneal_energy_weight/post_anneal_force_weight: optional
+    energy/force loss-weight schedule. anneal_epoch=None (default) keeps
+    energy_weight/force_weight fixed for the whole run, unchanged from before.
+    When set, training starts at (energy_weight, force_weight) as usual, then
+    switches to (post_anneal_energy_weight, post_anneal_force_weight) at
+    anneal_epoch and stays there. This mirrors the force-then-energy annealing
+    schedules reported for MACE and NequIP (force-dominant early to fix the
+    local force/gradient shape, energy-dominant later to fix up absolute
+    energy calibration) - see run_waterbox_study.py for the specific schedule
+    and citations used here.
 
     momentum_weight=0.0 is the "water_absolute" condition; momentum_weight>0 is
     "water_absolute+momentum" - see module docstring for what that term checks.
@@ -244,7 +307,14 @@ def train_waterbox_model(
         "distance_influence": "both",
     }
 
-    model = WaterLNNP(model_args, local_molecule_ids=local_molecule_ids, num_molecules_per_system=num_molecules_per_system)
+    model = WaterLNNP(
+        model_args,
+        local_molecule_ids=local_molecule_ids,
+        num_molecules_per_system=num_molecules_per_system,
+        anneal_epoch=anneal_epoch,
+        post_anneal_energy_weight=post_anneal_energy_weight,
+        post_anneal_force_weight=post_anneal_force_weight,
+    )
 
     # Both conditions are absolute-mode only (no delta-learning), so
     # val_total_mse_loss means the same thing in both - no confound between
@@ -256,9 +326,25 @@ def train_waterbox_model(
         filename=checkpoint_name,
         save_top_k=1,
         mode="min",
+    )
+    # Dedicated true-last-epoch checkpoint, separate from the monitored
+    # best-tracker above. save_last=True on a monitored ModelCheckpoint only
+    # updates last.ckpt "whenever a checkpoint file gets saved" (Lightning's
+    # own docs) - i.e. only on improvement, same gating as the best-tracker
+    # itself. If the best epoch stops improving early (confirmed happening
+    # here - e.g. one water_absolute seed's global-minimum val_total_mse_loss
+    # was epoch 3 of 18, never beaten again), last.ckpt silently freezes at
+    # that same epoch instead of tracking the actual final epoch, making the
+    # two checkpoints indistinguishable. monitor=None + save_top_k=0 removes
+    # the improvement gate entirely, so this one unconditionally overwrites
+    # last.ckpt every epoch regardless of validation performance.
+    last_epoch_callback = ModelCheckpoint(
+        dirpath=save_dir,
+        monitor=None,
+        save_top_k=0,
         save_last=True,
     )
-    early_stop = EarlyStopping(monitor="val_total_mse_loss", patience=30, mode="min", strict=False)
+    early_stop = EarlyStopping(monitor="val_total_mse_loss", patience=early_stop_patience, mode="min", strict=False)
     history_callback = MetricHistoryCallback(save_dir, checkpoint_name)
     logger = TensorBoardLogger(save_dir=log_dir, name="waterbox")
     trainer_callbacks = list(trainer_callbacks or [])
@@ -268,7 +354,7 @@ def train_waterbox_model(
         max_epochs=num_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
-        callbacks=[checkpoint_callback, early_stop, history_callback, *trainer_callbacks],
+        callbacks=[checkpoint_callback, last_epoch_callback, early_stop, history_callback, *trainer_callbacks],
         logger=logger,
         log_every_n_steps=10,
         gradient_clip_val=1000.0,
