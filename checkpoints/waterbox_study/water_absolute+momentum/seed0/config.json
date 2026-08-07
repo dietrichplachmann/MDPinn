@@ -47,7 +47,7 @@
   },
   "training": {
     "batch_size": 1,
-    "num_epochs": 20,
+    "num_epochs": 50,
     "lr": 0.0001,
     "seed": 0,
     "weight_decay": 0.0,
@@ -57,23 +57,25 @@
   },
   "num_molecules_per_system": 64,
   "validation_metrics": {
-    "epoch": 19.0,
-    "lr": 9.999999747378752e-05,
-    "train_total_mse_loss": 157.763427734375,
-    "val_total_l1_loss": 0.9828872680664062,
-    "val_total_mse_loss": 5.558181285858154,
-    "train_y_mse_loss": 3130.125732421875,
-    "val_y_l1_loss": 8.920966148376465,
-    "val_y_mse_loss": 91.85670471191406,
-    "train_neg_dy_mse_loss": 1.3232848644256592,
-    "val_neg_dy_l1_loss": 0.5650935769081116,
-    "val_neg_dy_mse_loss": 1.0161540508270264,
-    "train_loss_momentum_per_molecule": 38.2194709777832,
-    "train_loss_momentum_per_molecule_weighted": 0.38219496607780457,
-    "train_total_with_momentum": 158.14559936523438,
-    "post_test.test_total_l1_loss": 0.8745086789131165,
-    "post_test.test_y_l1_loss": 4.6593017578125,
-    "post_test.test_neg_dy_l1_loss": 0.6753090620040894
+    "epoch": 49.0,
+    "lr": 6.399999983841553e-05,
+    "train_total_mse_loss": 751.3823852539062,
+    "val_total_l1_loss": 51.26153564453125,
+    "val_total_mse_loss": 3493.58154296875,
+    "train_y_mse_loss": 1001.4722290039062,
+    "val_y_l1_loss": 68.15095520019531,
+    "val_y_mse_loss": 4657.7861328125,
+    "train_neg_dy_mse_loss": 1.1128968000411987,
+    "val_neg_dy_l1_loss": 0.5932832956314087,
+    "val_neg_dy_mse_loss": 0.9678582549095154,
+    "train_loss_momentum_per_molecule": 40.21432113647461,
+    "train_loss_momentum_per_molecule_weighted": 0.40214264392852783,
+    "train_total_with_momentum": 751.7847290039062,
+    "train_y_weight": 0.75,
+    "train_neg_dy_weight": 0.25,
+    "post_test.test_total_l1_loss": 3.5546882152557373,
+    "post_test.test_y_l1_loss": 4.568005561828613,
+    "post_test.test_neg_dy_l1_loss": 0.5147365927696228
   },
   "history_paths": {
     "json": "checkpoints/waterbox_study/water_absolute+momentum/seed0/best_model_history.json",
@@ -81,11 +83,11 @@
     "plot": "checkpoints/waterbox_study/water_absolute+momentum/seed0/best_model_history.png",
     "plot_no_epoch0": "checkpoints/waterbox_study/water_absolute+momentum/seed0/best_model_history_no_epoch0.png"
   },
-  "best_model_path": "/home/lachmadh/projects/MDPinn/checkpoints/waterbox_study/water_absolute+momentum/seed0/best_model.ckpt",
-  "best_model_score": 3.8513596057891846,
+  "best_model_path": "/home/lachmadh/projects/MDPinn/checkpoints/waterbox_study/water_absolute+momentum/seed0/best_model-v1.ckpt",
+  "best_model_score": 1.910801649093628,
   "test_results": {
-    "test_total_l1_loss": 0.8745086789131165,
-    "test_y_l1_loss": 4.6593017578125,
-    "test_neg_dy_l1_loss": 0.6753090620040894
+    "test_total_l1_loss": 3.5546882152557373,
+    "test_y_l1_loss": 4.568005561828613,
+    "test_neg_dy_l1_loss": 0.5147365927696228
   }
 }
