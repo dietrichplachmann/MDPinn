@@ -59,11 +59,14 @@ torch.load = lambda *args, **kwargs: _original_load(*args, **{**kwargs, "weights
 class WaterLNNP(LNNP):
     """Plain-supervised LNNP plus an optional per-molecule momentum penalty.
 
-    Does not override on_validation_epoch_end/on_train_epoch_end at all (unlike
-    PhysicsInformedLNNP in train_physics.py), so the base LNNP's own validation
-    logging (val_total_mse_loss and friends) works exactly as it does in the
-    plain train_standard.py path - no risk of the missing-super()-call bug that
-    broke val_total_mse_loss there earlier in this project.
+    Overrides on_validation_epoch_end (in addition to on_train_epoch_start/end)
+    to log val_checkpoint_score - see that method's docstring for why
+    val_total_mse_loss alone isn't a safe thing to monitor for checkpoint
+    selection when weight-annealing is active. Every override calls super()
+    first, so the base LNNP's own logging (val_total_mse_loss and friends)
+    still works exactly as it does in the plain train_standard.py path - no
+    risk of the missing-super()-call bug that broke val_total_mse_loss there
+    earlier in this project.
     """
 
     def __init__(
@@ -120,6 +123,35 @@ class WaterLNNP(LNNP):
         # verifiable in the same place as every other training curve.
         self.log("train_y_weight", float(self.hparams.y_weight), on_step=False, on_epoch=True)
         self.log("train_neg_dy_weight", float(self.hparams.neg_dy_weight), on_step=False, on_epoch=True)
+
+    def on_validation_epoch_end(self):
+        # MUST call super() first - see on_train_epoch_end's comment above.
+        # This also means val_y_mse_loss/val_neg_dy_mse_loss are already
+        # populated in trainer.callback_metrics by the time this line
+        # finishes, since LNNP's own on_validation_epoch_end is what logs
+        # them.
+        super().on_validation_epoch_end()
+
+        # val_total_mse_loss (what LNNP logs) is w_E*val_y_mse + w_F*val_neg_dy_mse
+        # using WHATEVER (w_E, w_F) are active this epoch - fine as a training
+        # diagnostic, but not safe for ModelCheckpoint/EarlyStopping to
+        # monitor when annealing is active: its definition changes at
+        # anneal_epoch (force-dominant 0.05/0.95 before, energy-dominant
+        # 0.75/0.25 after), so a post-anneal epoch is judged by a
+        # structurally different, harsher yardstick than a pre-anneal one,
+        # regardless of whether the model actually improved - confirmed
+        # empirically, every water-box cell's "best" epoch landed pre-anneal.
+        # val_checkpoint_score fixes this by always using the run's original
+        # (pre-anneal) weights, so "best" means the same thing on every
+        # epoch of the run, annealed or not. For a non-annealed run
+        # (anneal_epoch=None), this is identical to val_total_mse_loss, since
+        # _pre_anneal_y_weight/neg_dy_weight are just the run's one constant
+        # weight pair - so this is a no-op change for existing behavior.
+        y_mse = self.trainer.callback_metrics.get("val_y_mse_loss")
+        neg_dy_mse = self.trainer.callback_metrics.get("val_neg_dy_mse_loss")
+        if y_mse is not None and neg_dy_mse is not None:
+            checkpoint_score = self._pre_anneal_y_weight * y_mse + self._pre_anneal_neg_dy_weight * neg_dy_mse
+            self.log("val_checkpoint_score", checkpoint_score, on_step=False, on_epoch=True)
 
     def _global_molecule_ids_for_batch(self, batch):
         n_atoms = batch.z.shape[0]
@@ -317,11 +349,21 @@ def train_waterbox_model(
     )
 
     # Both conditions are absolute-mode only (no delta-learning), so
-    # val_total_mse_loss means the same thing in both - no confound between
+    # val_checkpoint_score means the same thing in both - no confound between
     # water_absolute and water_absolute+momentum the way there would be if one
     # used a residualized target and the other didn't.
+    #
+    # Monitors val_checkpoint_score (WaterLNNP.on_validation_epoch_end),
+    # NOT val_total_mse_loss - the latter is weighted by whatever (y_weight,
+    # neg_dy_weight) are active that epoch, which the anneal schedule changes
+    # partway through the run. Monitoring it directly would judge post-anneal
+    # epochs by a structurally different, harsher yardstick than pre-anneal
+    # ones, biasing "best" toward pre-anneal regardless of actual model
+    # quality - confirmed empirically on the first annealed run, where every
+    # cell's best epoch landed pre-anneal. val_checkpoint_score always uses
+    # the run's original weights, so it means the same thing on every epoch.
     checkpoint_callback = ModelCheckpoint(
-        monitor="val_total_mse_loss",
+        monitor="val_checkpoint_score",
         dirpath=save_dir,
         filename=checkpoint_name,
         save_top_k=1,
@@ -344,7 +386,10 @@ def train_waterbox_model(
         save_top_k=0,
         save_last=True,
     )
-    early_stop = EarlyStopping(monitor="val_total_mse_loss", patience=early_stop_patience, mode="min", strict=False)
+    # Same reasoning as checkpoint_callback above - monitor the anneal-
+    # invariant score, not the raw weighted total, so "no improvement in N
+    # epochs" isn't tripped by the metric's own scale jumping at anneal_epoch.
+    early_stop = EarlyStopping(monitor="val_checkpoint_score", patience=early_stop_patience, mode="min", strict=False)
     history_callback = MetricHistoryCallback(save_dir, checkpoint_name)
     logger = TensorBoardLogger(save_dir=log_dir, name="waterbox")
     trainer_callbacks = list(trainer_callbacks or [])
@@ -377,7 +422,10 @@ def train_waterbox_model(
     val_metrics = dict(fit_metrics)
     val_metrics.update({f"post_test.{key}": value for key, value in test_callback_metrics.items()})
     if best_model_score is not None:
-        val_metrics.setdefault("val_total_mse_loss", best_model_score)
+        # checkpoint_callback now monitors val_checkpoint_score, not
+        # val_total_mse_loss (see checkpoint_callback's own comment) - label
+        # this with the metric it actually is, not the old one.
+        val_metrics.setdefault("val_checkpoint_score", best_model_score)
 
     config = {
         "model_args": model_args,
