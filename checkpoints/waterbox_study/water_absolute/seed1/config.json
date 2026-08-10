@@ -59,20 +59,21 @@
   "validation_metrics": {
     "epoch": 49.0,
     "lr": 6.399999983841553e-05,
-    "train_total_mse_loss": 1075.22705078125,
-    "val_total_l1_loss": 14.075169563293457,
-    "val_total_mse_loss": 267.065185546875,
-    "train_y_mse_loss": 1433.0794677734375,
-    "val_y_l1_loss": 18.49078369140625,
-    "val_y_mse_loss": 355.567138671875,
-    "train_neg_dy_mse_loss": 1.6698617935180664,
-    "val_neg_dy_l1_loss": 0.8283214569091797,
-    "val_neg_dy_mse_loss": 1.5592989921569824,
+    "train_total_mse_loss": 511.060302734375,
+    "val_total_l1_loss": 6.731942176818848,
+    "val_total_mse_loss": 66.14877319335938,
+    "train_y_mse_loss": 680.9437866210938,
+    "val_y_l1_loss": 8.78787899017334,
+    "val_y_mse_loss": 87.75886535644531,
+    "train_neg_dy_mse_loss": 1.409794807434082,
+    "val_neg_dy_l1_loss": 0.5641331076622009,
+    "val_neg_dy_mse_loss": 1.3184847831726074,
+    "val_checkpoint_score": 5.640503883361816,
     "train_y_weight": 0.75,
     "train_neg_dy_weight": 0.25,
-    "post_test.test_total_l1_loss": 2.7790486812591553,
-    "post_test.test_y_l1_loss": 3.4523561000823975,
-    "post_test.test_neg_dy_l1_loss": 0.7591273188591003
+    "post_test.test_total_l1_loss": 2.048794984817505,
+    "post_test.test_y_l1_loss": 2.513964891433716,
+    "post_test.test_neg_dy_l1_loss": 0.6532847881317139
   },
   "history_paths": {
     "json": "checkpoints/waterbox_study/water_absolute/seed1/best_model_history.json",
@@ -80,11 +81,11 @@
     "plot": "checkpoints/waterbox_study/water_absolute/seed1/best_model_history.png",
     "plot_no_epoch0": "checkpoints/waterbox_study/water_absolute/seed1/best_model_history_no_epoch0.png"
   },
-  "best_model_path": "/home/lachmadh/projects/MDPinn/checkpoints/waterbox_study/water_absolute/seed1/best_model-v1.ckpt",
-  "best_model_score": 3.312124013900757,
+  "best_model_path": "/home/lachmadh/projects/MDPinn/checkpoints/waterbox_study/water_absolute/seed1/best_model-v2.ckpt",
+  "best_model_score": 1.9022352695465088,
   "test_results": {
-    "test_total_l1_loss": 2.7790486812591553,
-    "test_y_l1_loss": 3.4523561000823975,
-    "test_neg_dy_l1_loss": 0.7591273188591003
+    "test_total_l1_loss": 2.048794984817505,
+    "test_y_l1_loss": 2.513964891433716,
+    "test_neg_dy_l1_loss": 0.6532847881317139
   }
 }

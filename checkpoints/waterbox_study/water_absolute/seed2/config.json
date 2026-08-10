@@ -58,21 +58,22 @@
   "num_molecules_per_system": 64,
   "validation_metrics": {
     "epoch": 49.0,
-    "lr": 6.399999983841553e-05,
-    "train_total_mse_loss": 1454.031005859375,
-    "val_total_l1_loss": 75.59696197509766,
-    "val_total_mse_loss": 7582.77978515625,
-    "train_y_mse_loss": 1937.777099609375,
-    "val_y_l1_loss": 100.4738540649414,
-    "val_y_mse_loss": 10109.65234375,
-    "train_neg_dy_mse_loss": 2.7926268577575684,
-    "val_neg_dy_l1_loss": 0.9662925601005554,
-    "val_neg_dy_mse_loss": 2.1612701416015625,
+    "lr": 7.999999797903001e-05,
+    "train_total_mse_loss": 1547.17431640625,
+    "val_total_l1_loss": 79.60387420654297,
+    "val_total_mse_loss": 8460.296875,
+    "train_y_mse_loss": 2062.395751953125,
+    "val_y_l1_loss": 105.91948699951172,
+    "val_y_mse_loss": 11279.97265625,
+    "train_neg_dy_mse_loss": 1.5095407962799072,
+    "val_neg_dy_l1_loss": 0.6570180058479309,
+    "val_neg_dy_mse_loss": 1.2715195417404175,
+    "val_checkpoint_score": 565.2066040039062,
     "train_y_weight": 0.75,
     "train_neg_dy_weight": 0.25,
-    "post_test.test_total_l1_loss": 3.4709534645080566,
-    "post_test.test_y_l1_loss": 4.40228271484375,
-    "post_test.test_neg_dy_l1_loss": 0.6769656538963318
+    "post_test.test_total_l1_loss": 1.949400782585144,
+    "post_test.test_y_l1_loss": 2.3509278297424316,
+    "post_test.test_neg_dy_l1_loss": 0.7448197603225708
   },
   "history_paths": {
     "json": "checkpoints/waterbox_study/water_absolute/seed2/best_model_history.json",
@@ -80,11 +81,11 @@
     "plot": "checkpoints/waterbox_study/water_absolute/seed2/best_model_history.png",
     "plot_no_epoch0": "checkpoints/waterbox_study/water_absolute/seed2/best_model_history_no_epoch0.png"
   },
-  "best_model_path": "/home/lachmadh/projects/MDPinn/checkpoints/waterbox_study/water_absolute/seed2/best_model-v1.ckpt",
-  "best_model_score": 2.706652879714966,
+  "best_model_path": "/home/lachmadh/projects/MDPinn/checkpoints/waterbox_study/water_absolute/seed2/best_model-v2.ckpt",
+  "best_model_score": 1.8305751085281372,
   "test_results": {
-    "test_total_l1_loss": 3.4709534645080566,
-    "test_y_l1_loss": 4.40228271484375,
-    "test_neg_dy_l1_loss": 0.6769656538963318
+    "test_total_l1_loss": 1.949400782585144,
+    "test_y_l1_loss": 2.3509278297424316,
+    "test_neg_dy_l1_loss": 0.7448197603225708
   }
 }
