@@ -119,6 +119,18 @@ def verify_periodicity(checkpoint_path, data_root="./data", n_configs=5, seed=42
 
         e0, f0 = _predict(model, z, pos, box, device)
 
+        # model_args sets remove_ref_energy=False (train_waterbox.py), so this is
+        # a raw absolute total-system energy, not a small residual - plausibly
+        # large in magnitude (real DFT total energies for ~200 atoms are O(1e3-1e5)
+        # eV). Print it and the plain float32 rounding floor AT THAT MAGNITUDE
+        # (|E0| * 2**-23, float32's relative machine epsilon) alongside the
+        # invariance diffs below - if the diffs are the same order of magnitude as
+        # this floor, that's ordinary float32 noise from a large absolute energy
+        # scale, not evidence of any reduced-precision (TF32/fp16) computation.
+        e0_val = float(e0.squeeze().item())
+        fp32_ulp = abs(e0_val) * 2 ** -23
+        print(f"  baseline energy E0 = {e0_val:.4f} eV, plain float32 ULP at this magnitude ~= {fp32_ulp:.6f} eV")
+
         shifts = [
             ("+a", lattice[0], True),
             ("+b", lattice[1], True),
