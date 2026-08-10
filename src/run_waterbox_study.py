@@ -32,7 +32,14 @@ CONDITIONS = {
     "water_absolute": dict(momentum_weight=0.0),
     "water_absolute+momentum": dict(momentum_weight=0.01),
 }
-SEEDS = [0, 1, 2]
+SEEDS = [0, 1, 2, 3, 4, 5]
+# Extended from 3 to 6 seeds per condition (2026-08-10), now that both reasons
+# to previously hold off are resolved: checkpoint selection is anneal-invariant
+# (val_checkpoint_score, train_waterbox.py) and TensorNet's periodic neighbor
+# search is confirmed periodicity-aware (src/verify_periodicity.py,
+# paper/main.tex Section 3.4). Seeds 0-2 already have checkpoints on disk from
+# the prior run - _run_training's existing-checkpoint skip means re-running
+# this only trains the 3 new seeds, not a full redo.
 
 # Memory-footprint overrides, NOT part of the experiment design (that's
 # CONDITIONS above) - kept separate so the science (momentum_weight) and the
@@ -275,10 +282,14 @@ def _write_summary_markdown(summary_rows, path):
         "with no training pressure on it). If it's already ~0 here too, that undercuts",
         "this study's premise and is worth knowing before reading anything else below.",
         "",
-        "n=3 seeds supports a coarse signal-vs-noise read, not formal significance -",
-        "treat a difference as real only if it clears roughly 1 std of both conditions.",
-        "",
     ]
+    max_n_seeds = max((row.get("n_seeds") or 0) for row in summary_rows) if summary_rows else 0
+    lines.append(
+        f"n={max_n_seeds} seeds supports a coarse signal-vs-noise read, not formal "
+        "significance - treat a difference as real only if it clears roughly 1 std "
+        "of both conditions."
+    )
+    lines.append("")
     header = "| condition | n_seeds | " + " | ".join(METRIC_COLUMNS) + " |"
     sep = "| --- | --- | " + " | ".join("---" for _ in METRIC_COLUMNS) + " |"
     lines += [header, sep]
