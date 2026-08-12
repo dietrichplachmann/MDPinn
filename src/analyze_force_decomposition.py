@@ -121,6 +121,32 @@ def decompose_forces(forces, group_ids, num_molecules):
     return net_force_mag.cpu().numpy(), internal_force_mag.cpu().numpy()
 
 
+def net_torque_mag(pos, forces, group_ids, num_molecules):
+    """Per-molecule net torque magnitude ||sum_i (r_i - centroid_m) x F_i||.
+
+    Deliberately mirrors physics_losses.py's per_fragment_momentum_loss
+    centroid/cross-product computation line-for-line (same centroid
+    calculation, same torch.cross call, same index_add_ scatter) rather than
+    writing new torque logic - that function's angular term is exactly
+    ||T_sum||^2 before the final mean-over-molecules; this returns ||T_sum||
+    per molecule (not squared, not meaned) so it's directly comparable in
+    kind to decompose_forces's net_force_mag output.
+    """
+    device = pos.device
+    counts = torch.zeros(num_molecules, device=device)
+    counts.index_add_(0, group_ids, torch.ones(len(group_ids), device=device))
+
+    pos_sum = torch.zeros(num_molecules, 3, device=device)
+    pos_sum.index_add_(0, group_ids, pos)
+    centroid = pos_sum / counts.unsqueeze(1)
+
+    pos_centered = pos - centroid[group_ids]
+    torque_i = torch.cross(pos_centered, forces, dim=1)
+    torque_sum = torch.zeros(num_molecules, 3, device=device)
+    torque_sum.index_add_(0, group_ids, torque_i)
+    return torque_sum.norm(dim=1).cpu().numpy()
+
+
 def load_models(ckpt_absolute, ckpt_momentum, device=None):
     """Shared by analyze() and analyze_trajectory_frames() - also lets a
     caller running many trajectory pairs (run_force_decomposition_study.py)
@@ -304,9 +330,20 @@ def paired_bias_test(ckpt_absolute=None, ckpt_momentum=None, models=None, data_r
 
     For each of n_configs held-out configs, forms the PAIRED difference
     (momentum minus absolute) at every individual atom/molecule - not
-    averaged first - for three quantities: raw per-atom force magnitude,
-    per-molecule net force magnitude (decompose_forces), and per-atom
-    internal force magnitude. For each, reports:
+    averaged first - for four quantities: raw per-atom force magnitude,
+    per-molecule net force magnitude and net torque magnitude
+    (decompose_forces / net_torque_mag), and per-atom internal force
+    magnitude. Net torque is included specifically to check a candidate
+    reconciliation: the n=6 static study found momentum's AGGREGATE
+    per_fragment_momentum_loss (net force squared + net torque squared,
+    averaged across 6 training seeds) was lower for momentum, while net
+    force magnitude alone (this test, seed 0 only) comes out higher for
+    momentum - if net torque shows a comparably-sized bias in the opposite
+    direction, that resolves the apparent tension (the combined squared
+    metric could be dominated by a torque improvement masking a linear-force
+    regression) rather than the two results actually contradicting.
+
+    For each quantity, reports:
       - mean paired difference, standard error, and a two-sided z-test
         p-value (normal approximation - valid here since n is in the
         thousands, so the CLT applies regardless of the underlying
@@ -329,7 +366,7 @@ def paired_bias_test(ckpt_absolute=None, ckpt_momentum=None, models=None, data_r
     _, _, test_data = random_split(full_dataset, seed=seed)
     n_configs = min(n_configs, len(test_data))
 
-    raw_diffs, net_diffs, internal_diffs = [], [], []
+    raw_diffs, net_diffs, internal_diffs, torque_diffs = [], [], [], []
     for idx in range(n_configs):
         sample = test_data[idx].to(device)
         z, pos, box = sample.z, sample.pos.float(), getattr(sample, "box", None)
@@ -345,6 +382,10 @@ def paired_bias_test(ckpt_absolute=None, ckpt_momentum=None, models=None, data_r
         net_mom, internal_mom = decompose_forces(forces_mom, group_ids, num_molecules)
         net_diffs.append(net_mom - net_abs)
         internal_diffs.append(internal_mom - internal_abs)
+
+        torque_abs = net_torque_mag(pos, forces_abs, group_ids, num_molecules)
+        torque_mom = net_torque_mag(pos, forces_mom, group_ids, num_molecules)
+        torque_diffs.append(torque_mom - torque_abs)
 
     def _report(name, diffs):
         diffs = np.concatenate(diffs)
@@ -373,13 +414,18 @@ def paired_bias_test(ckpt_absolute=None, ckpt_momentum=None, models=None, data_r
         "raw_force_mag": _report("raw_force_mag", raw_diffs),
         "net_force_mag": _report("net_force_mag", net_diffs),
         "internal_force_mag": _report("internal_force_mag", internal_diffs),
+        "net_torque_mag": _report("net_torque_mag", torque_diffs),
     }
 
     print(
         "\nA small |z| / large p means no statistically detectable systematic bias in that "
         "quantity. A significant, consistent-sign bias (large |z|, tiny p, frac_positive far "
-        "from 0.5) in net_force_mag specifically would be the systematic component sec:q3 is "
-        "looking for."
+        "from 0.5) in net_force_mag specifically is the systematic component behind the rollout "
+        "heating (sec:q3). net_torque_mag is the reconciliation check: if it shows a "
+        "comparably-sized bias in the OPPOSITE direction (momentum lower), that explains why the "
+        "n=6 study's aggregate per_fragment_momentum_loss (net force^2 + net torque^2, averaged "
+        "across 6 seeds) came out lower for momentum despite this seed's net force alone being "
+        "higher - a torque improvement masking a linear-force regression, not a contradiction."
     )
     return results
 
