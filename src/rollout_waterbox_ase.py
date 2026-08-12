@@ -85,15 +85,36 @@ def _averaged_rdf(frames, rmax, nbins, elements):
         return np.mean(rdfs, axis=0), rr
 
 
-def _reference_rdf(full_dataset, rmax, nbins, elements, n_samples=200, seed=42):
-    """Ensemble RDF from n_samples raw dataset configurations (not the
-    rollout's trajectory) - the "what does real liquid water actually look
-    like" comparison point."""
+def _sample_reference_frames(full_dataset, n_samples=200, seed=42):
+    """n_samples raw dataset configurations (not the rollout's trajectory) -
+    the "what does real liquid water actually look like" comparison point.
+    Sampled once and reused across all element pairs, rather than resampled
+    per pair - also lets the caller inspect box sizes across the same set
+    used for the RDF, needed for _safe_rmax below."""
     rng = np.random.default_rng(seed)
     n_samples = min(n_samples, len(full_dataset))
     indices = rng.choice(len(full_dataset), size=n_samples, replace=False)
-    frames = [atoms_from_waterbox_sample(full_dataset[int(i)]) for i in indices]
-    return _averaged_rdf(frames, rmax, nbins, elements)
+    return [atoms_from_waterbox_sample(full_dataset[int(i)]) for i in indices]
+
+
+def _safe_rmax(frames, requested_rmax):
+    """get_rdf's minimum-image convention requires rmax < (smallest box
+    edge)/2 - box size varies configuration to configuration in this dataset
+    (confirmed on the training box: as low as ~11.94 A, versus the ~12.4-13.7
+    A range verify_periodicity.py happened to sample), so a single fixed
+    constant isn't safe across an arbitrary batch of configs. Compute the
+    real limit from whichever frames are actually in play instead of
+    guessing a smaller constant and risking the same failure on a still
+    smaller box elsewhere in the 1593 configs."""
+    min_edge = min(float(min(frame.cell.lengths())) for frame in frames)
+    safe = min(requested_rmax, 0.45 * min_edge)
+    if safe < requested_rmax:
+        print(
+            f"Reducing rdf_rmax from {requested_rmax} to {safe:.3f} A - smallest box edge "
+            f"among the frames used ({min_edge:.3f} A) doesn't support the requested cutoff "
+            "under minimum-image convention (needs rmax < edge/2)."
+        )
+    return safe
 
 
 def run_rollout(
@@ -171,12 +192,20 @@ def run_rollout(
         f"({drift_fraction * 100:.4f}% of total starting energy)"
     )
 
+    reference_frames = _sample_reference_frames(full_dataset, seed=seed)
+    # One rmax shared by every RDF call below, so every column in rdf.csv
+    # lands on the same r-grid - computed from BOTH the rollout's (fixed,
+    # single) box and the reference sample's (varying) box sizes, not just
+    # the rollout's, since the reference sample is what actually triggered
+    # CellTooSmall on the training box.
+    rmax = _safe_rmax(trajectory_frames + reference_frames, rdf_rmax)
+
     rdf_path = out_dir / "rdf.csv"
     header = ["r_angstrom"]
     columns = {}
     for name, elems in ELEMENT_PAIRS:
-        rollout_rdf, rr = _averaged_rdf(trajectory_frames, rdf_rmax, rdf_nbins, elems)
-        ref_rdf, _ = _reference_rdf(full_dataset, rdf_rmax, rdf_nbins, elems, seed=seed)
+        rollout_rdf, rr = _averaged_rdf(trajectory_frames, rmax, rdf_nbins, elems)
+        ref_rdf, _ = _averaged_rdf(reference_frames, rmax, rdf_nbins, elems)
         columns[f"{name}_rollout"] = rollout_rdf
         columns[f"{name}_reference"] = ref_rdf
         header += [f"{name}_rollout", f"{name}_reference"]
