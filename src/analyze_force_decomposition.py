@@ -290,22 +290,120 @@ def analyze_trajectory_frames(
     return rows
 
 
+def paired_bias_test(ckpt_absolute=None, ckpt_momentum=None, models=None, data_root="./data",
+                      n_configs=100, seed=42, device=None):
+    """Statistically rigorous version of the point-wise comparisons in
+    analyze()/analyze_trajectory_frames(): those eyeballed MEANS over a
+    handful of configs and found "the two models agree closely" - this
+    tests whether a small but SYSTEMATIC, sign-consistent bias is hiding in
+    that noise, using many more configs/atoms/molecules and a proper paired
+    significance test rather than comparing aggregate means. This is the
+    direct test paper/main.tex Section 5.3 (sec:q3) calls for, implied by
+    run_force_decomposition_study.py's 10/10-unanimous trajectory-divergence
+    direction but not yet directly detected in any point-wise comparison.
+
+    For each of n_configs held-out configs, forms the PAIRED difference
+    (momentum minus absolute) at every individual atom/molecule - not
+    averaged first - for three quantities: raw per-atom force magnitude,
+    per-molecule net force magnitude (decompose_forces), and per-atom
+    internal force magnitude. For each, reports:
+      - mean paired difference, standard error, and a two-sided z-test
+        p-value (normal approximation - valid here since n is in the
+        thousands, so the CLT applies regardless of the underlying
+        per-atom/per-molecule distribution shape; no scipy dependency
+        needed, just math.erfc)
+      - a sign test: what fraction of individual pairs have momentum >
+        absolute, tested against the null of exactly 50/50 (binomial normal
+        approximation) - this is the direct "is the sign consistently
+        one-directional" test, not just "is the mean nonzero"
+    """
+    import math
+
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    if models is None:
+        if not ckpt_absolute or not ckpt_momentum:
+            raise ValueError("Provide either models=... (pre-loaded) or both ckpt_absolute and ckpt_momentum.")
+        models = load_models(ckpt_absolute, ckpt_momentum, device)
+
+    full_dataset = load_waterbox_dataset(data_root=data_root)
+    _, _, test_data = random_split(full_dataset, seed=seed)
+    n_configs = min(n_configs, len(test_data))
+
+    raw_diffs, net_diffs, internal_diffs = [], [], []
+    for idx in range(n_configs):
+        sample = test_data[idx].to(device)
+        z, pos, box = sample.z, sample.pos.float(), getattr(sample, "box", None)
+        group_ids = infer_molecule_groups(z, pos, box=box).to(device)
+        num_molecules = int(group_ids.max().item()) + 1
+
+        forces_abs = _predict_forces(models["water_absolute"], z, pos, box, device)
+        forces_mom = _predict_forces(models["water_absolute+momentum"], z, pos, box, device)
+
+        raw_diffs.append((forces_mom.norm(dim=1) - forces_abs.norm(dim=1)).cpu().numpy())
+
+        net_abs, internal_abs = decompose_forces(forces_abs, group_ids, num_molecules)
+        net_mom, internal_mom = decompose_forces(forces_mom, group_ids, num_molecules)
+        net_diffs.append(net_mom - net_abs)
+        internal_diffs.append(internal_mom - internal_abs)
+
+    def _report(name, diffs):
+        diffs = np.concatenate(diffs)
+        n = len(diffs)
+        mean = float(diffs.mean())
+        se = float(diffs.std(ddof=1) / np.sqrt(n))
+        z = mean / se if se > 0 else float("nan")
+        p_mean = math.erfc(abs(z) / math.sqrt(2))
+
+        frac_positive = float((diffs > 0).sum()) / n
+        se_frac = 0.5 / np.sqrt(n)
+        z_sign = (frac_positive - 0.5) / se_frac
+        p_sign = math.erfc(abs(z_sign) / math.sqrt(2))
+
+        print(
+            f"{name:20s} n={n:<7d} mean_diff={mean:+.5f}  z={z:+7.2f}  p={p_mean:.2e}   "
+            f"frac_positive={frac_positive:.4f}  z_sign={z_sign:+7.2f}  p_sign={p_sign:.2e}"
+        )
+        return {
+            "n": n, "mean_diff": mean, "z_mean": z, "p_mean": p_mean,
+            "frac_positive": frac_positive, "z_sign": z_sign, "p_sign": p_sign,
+        }
+
+    print(f"Paired momentum-minus-absolute force differences across {n_configs} held-out configs:")
+    results = {
+        "raw_force_mag": _report("raw_force_mag", raw_diffs),
+        "net_force_mag": _report("net_force_mag", net_diffs),
+        "internal_force_mag": _report("internal_force_mag", internal_diffs),
+    }
+
+    print(
+        "\nA small |z| / large p means no statistically detectable systematic bias in that "
+        "quantity. A significant, consistent-sign bias (large |z|, tiny p, frac_positive far "
+        "from 0.5) in net_force_mag specifically would be the systematic component sec:q3 is "
+        "looking for."
+    )
+    return results
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=["equilibrium", "trajectory"],
+        choices=["equilibrium", "trajectory", "paired-bias"],
         default="equilibrium",
-        help="equilibrium (default, already run): held-out static DFT configs. "
-        "trajectory (new): real rollout.xyz frames, cross-evaluated under both models.",
+        help="equilibrium (already run): held-out static DFT configs, eyeballed means. "
+        "trajectory (already run): real rollout.xyz frames, cross-evaluated under both models. "
+        "paired-bias (new): rigorous paired significance test across many more configs.",
     )
     parser.add_argument("--ckpt-absolute", type=str, required=True)
     parser.add_argument("--ckpt-momentum", type=str, required=True)
     parser.add_argument("--data-root", type=str, default="./data")
-    parser.add_argument("--n-configs", type=int, default=6, help="equilibrium mode only")
-    parser.add_argument("--seed", type=int, default=42, help="equilibrium mode only")
+    parser.add_argument("--n-configs", type=int, default=None,
+                         help="held-out configs to use. Defaults to 6 for --mode equilibrium "
+                         "(matches the original eyeballed check) or 100 for --mode paired-bias "
+                         "(needs many more samples for a well-powered test) if not given.")
+    parser.add_argument("--seed", type=int, default=42, help="equilibrium/paired-bias modes only")
     parser.add_argument("--traj-absolute", type=str, default=None,
                          help="trajectory mode: path to water_absolute's rollout.xyz")
     parser.add_argument("--traj-momentum", type=str, default=None,
@@ -320,10 +418,10 @@ if __name__ == "__main__":
             ckpt_absolute=args.ckpt_absolute,
             ckpt_momentum=args.ckpt_momentum,
             data_root=args.data_root,
-            n_configs=args.n_configs,
+            n_configs=args.n_configs if args.n_configs is not None else 6,
             seed=args.seed,
         )
-    else:
+    elif args.mode == "trajectory":
         if not args.traj_absolute or not args.traj_momentum:
             parser.error("--mode trajectory requires both --traj-absolute and --traj-momentum")
         frame_indices = [int(x) for x in args.frame_indices.split(",")]
@@ -335,4 +433,12 @@ if __name__ == "__main__":
             frame_indices=frame_indices,
             ckpt_absolute=args.ckpt_absolute,
             ckpt_momentum=args.ckpt_momentum,
+        )
+    else:
+        paired_bias_test(
+            ckpt_absolute=args.ckpt_absolute,
+            ckpt_momentum=args.ckpt_momentum,
+            data_root=args.data_root,
+            n_configs=args.n_configs if args.n_configs is not None else 100,
+            seed=args.seed,
         )
