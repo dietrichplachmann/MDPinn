@@ -68,13 +68,15 @@ ELEMENT_PAIRS = [("O-O", (8, 8)), ("O-H", (8, 1)), ("H-H", (1, 1))]
 def _averaged_rdf(frames, rmax, nbins, elements):
     """get_rdf accepting an iterable of Atoms to average over is an ASE
     >=3.28.0 feature; fall back to per-frame get_rdf + manual averaging on
-    older installs rather than assuming the newer signature is available -
-    not verified against whatever ASE version ends up installed on the
-    training box."""
+    older installs. Confirmed on the training box's installed ASE (<3.28):
+    it doesn't reject a list up front with TypeError - it accepts it, then
+    fails inside with AttributeError ('list' object has no attribute
+    'cell') because it unconditionally tries atoms.cell.volume. Catch both
+    rather than just the TypeError originally guessed at."""
     try:
         rdf, rr = get_rdf(frames, rmax=rmax, nbins=nbins, elements=elements)
         return np.asarray(rdf), np.asarray(rr)
-    except TypeError:
+    except (TypeError, AttributeError):
         rdfs = []
         rr = None
         for frame in frames:
