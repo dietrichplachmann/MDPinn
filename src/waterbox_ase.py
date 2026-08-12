@@ -35,6 +35,32 @@ from ase.calculators.calculator import Calculator, all_changes
 from evaluate_waterbox import load_waterbox_checkpoint
 
 
+def tensors_from_atoms(atoms, device):
+    """Extract (z, pos, box) tensors from an ASE Atoms object, matching
+    WaterBox's own per-sample convention exactly: box shape (1,3,3), row
+    i = lattice vector i (confirmed empirically in verify_periodicity.py's
+    diagonal/off-diagonal print, not assumed). Shared by TensorNetCalculator
+    (live rollout stepping) and analyze_force_decomposition.py (reading back
+    already-saved trajectory frames) so both go through the identical
+    tensor-construction logic rather than two separately-trusted copies of
+    it. pos is NOT given requires_grad here - callers that need forces
+    (anything computing energy/forces) must do that themselves, since a
+    read-only inspection use (e.g. just checking positions) shouldn't pay
+    for/create a grad-tracked tensor it never uses.
+    """
+    z = torch.as_tensor(atoms.get_atomic_numbers(), dtype=torch.long, device=device)
+    pos = torch.as_tensor(atoms.get_positions(), dtype=torch.float32, device=device)
+    box = None
+    if atoms.pbc.any():
+        # A rollout genuinely carries atoms outside [0, L) as they diffuse
+        # across the periodic boundary over time, unlike the single-shot
+        # shift verify_periodicity.py tested - exactly the case minimum-image
+        # distance handling exists for, and exactly what was verified there.
+        cell = np.array(atoms.get_cell())
+        box = torch.as_tensor(cell, dtype=torch.float32, device=device).unsqueeze(0)
+    return z, pos, box
+
+
 class TensorNetCalculator(Calculator):
     """Wraps a trained WaterLNNP/LNNP checkpoint as an ASE Calculator.
 
@@ -55,23 +81,9 @@ class TensorNetCalculator(Calculator):
     def calculate(self, atoms=None, properties=None, system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)
 
-        z = torch.as_tensor(atoms.get_atomic_numbers(), dtype=torch.long, device=self.device)
-        pos = torch.as_tensor(atoms.get_positions(), dtype=torch.float32, device=self.device)
+        z, pos, box = tensors_from_atoms(atoms, self.device)
         pos = pos.clone().detach().requires_grad_(True)
         batch = torch.zeros(len(z), dtype=torch.long, device=self.device)
-
-        box = None
-        if atoms.pbc.any():
-            # Shape (1,3,3), matching WaterBox's own per-sample box shape and
-            # row-vector convention (both confirmed empirically in
-            # verify_periodicity.py's diagonal/off-diagonal print - not
-            # assumed here). A rollout will genuinely carry atoms outside
-            # [0, L) as they diffuse across the periodic boundary over time,
-            # unlike the single-shot shift verify_periodicity.py tested -
-            # that's exactly the case minimum-image distance handling exists
-            # for, and exactly what was verified there.
-            cell = np.array(atoms.get_cell())
-            box = torch.as_tensor(cell, dtype=torch.float32, device=self.device).unsqueeze(0)
 
         with torch.enable_grad():
             energy, forces = self.model(z, pos, batch=batch, box=box)

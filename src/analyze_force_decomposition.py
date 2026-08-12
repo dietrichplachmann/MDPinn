@@ -30,29 +30,63 @@ redistributing force within a molecule rather than by producing genuinely
 gentler forces overall - and that redistributed force is exactly what would
 show up as extra heating once integrated forward in a real rollout.
 
-This does NOT test the other two candidates in the paper (a checkpoint-
-selection artifact specific to these seed-0 checkpoints; a systematic
-force-accuracy tradeoff invisible to static force MAE) - those need
-different evidence (re-running with different seeds; comparing against
-ground-truth DFT forces rather than the two models against each other).
+This first mode (analyze(), --mode equilibrium) found no signal: momentum's
+net-force magnitude wasn't smaller than absolute's at these configurations
+(if anything slightly larger), and the internal-force share was nearly
+identical between conditions (~97% for both). That result is specific to
+near-equilibrium held-out DFT configurations, though - both models were
+trained on data close to that distribution, so a mechanism that's absent
+there could still emerge once geometries drift into configuration space
+neither model saw during training, which is exactly what a real overheated
+rollout does (heating to ~1000-2600K within under 1ps, per
+src/run_rollout_study.py). The second mode below
+(analyze_trajectory_frames(), --mode trajectory) tests that directly:
+candidate mechanism 1 in the paper's Q3 discussion (a force-accuracy
+difference invisible to static force MAE but that matters once the system
+evolves into higher-displacement, more energetic configurations).
+
+--mode trajectory reads real frames back from already-saved rollout.xyz
+trajectories (src/rollout_waterbox_ase.py writes one per run) and
+CROSS-evaluates: both models are run on frames from BOTH conditions'
+trajectories, not just the model that produced them. This separates two
+different questions that a same-model-on-own-trajectory comparison would
+conflate: "does a given model's force response change at hot/distorted
+geometries" vs. "are the hot geometries one condition's own rollout reaches
+qualitatively different from the other condition's" - either could produce
+a naive-looking correlation on its own.
+
+This does NOT test the remaining candidate in the paper (a checkpoint-
+selection artifact specific to these seed-0 checkpoints) - that needs
+different evidence (repeating either analysis across more training seeds).
 
 Usage:
-    python src/analyze_force_decomposition.py \\
+    # Mode 1 (already run): equilibrium held-out configs, no signal found.
+    python src/analyze_force_decomposition.py --mode equilibrium \\
         --ckpt-absolute checkpoints/waterbox_study/water_absolute/seed0/best_model.ckpt \\
         --ckpt-momentum "checkpoints/waterbox_study/water_absolute+momentum/seed0/best_model.ckpt"
 
-IMPORTANT - written without torchmdnet installed locally (same caveat as
-every other water-box script in this repo). Nothing here has been executed
-yet.
+    # Mode 2 (new): real rollout trajectory frames, cross-evaluated.
+    python src/analyze_force_decomposition.py --mode trajectory \\
+        --ckpt-absolute checkpoints/waterbox_study/water_absolute/seed0/best_model.ckpt \\
+        --ckpt-momentum "checkpoints/waterbox_study/water_absolute+momentum/seed0/best_model.ckpt" \\
+        --traj-absolute results/waterbox_rollout/rollout.xyz \\
+        --traj-momentum results/waterbox_rollout_momentum/rollout.xyz \\
+        --frame-indices 0,20,80,180
+
+IMPORTANT - written without torchmdnet/ase installed locally (same caveat as
+every other water-box script in this repo). Mode 1 has been run and its
+result is summarized above; mode 2 has not been executed yet.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import torch
+from ase.io import read as ase_read
 
 from evaluate_waterbox import load_waterbox_checkpoint
 from structural_metrics import infer_molecule_groups
+from waterbox_ase import tensors_from_atoms
 from waterbox_data import load_waterbox_dataset, random_split
 
 
@@ -156,21 +190,123 @@ def analyze(ckpt_absolute, ckpt_momentum, data_root="./data", n_configs=6, seed=
     return summary
 
 
+def analyze_trajectory_frames(ckpt_absolute, ckpt_momentum, trajectory_paths, frame_indices, device=None):
+    """Cross-evaluate both models on real trajectory snapshots (not held-out
+    static DFT configs) - tests candidate mechanism 1 (paper/main.tex Section
+    5.3, sec:q3): does either model's force behavior diverge specifically at
+    the hot, distorted geometries a real NVE rollout actually reaches, in a
+    way invisible at equilibrium (analyze()'s result above found no signal
+    there).
+
+    trajectory_paths: {label: path to a rollout.xyz} - e.g. one per
+    condition's own rollout. Each labeled trajectory's frames are evaluated
+    under BOTH models, not just the one that produced them - see module
+    docstring for why that cross-evaluation matters here.
+
+    frame_indices: which frames (by index into the saved trajectory, same
+    stride as --energy-log-stride used when the rollout was run - index i
+    is step i*energy_log_stride) to pull and evaluate. Pick a spread from
+    early (still near the starting geometry) to late (deep in the overheated
+    plateau) to see whether any divergence is present from the start or only
+    emerges as the geometry drifts.
+    """
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    models = {
+        "water_absolute": load_waterbox_checkpoint(ckpt_absolute, device=device),
+        "water_absolute+momentum": load_waterbox_checkpoint(ckpt_momentum, device=device),
+    }
+
+    print(
+        f"{'trajectory':16s} {'frame':6s} {'eval_model':28s} {'raw |F|':10s} "
+        f"{'net |F_mol|':12s} {'internal |F|':13s} internal/raw"
+    )
+    rows = []
+    for traj_label, traj_path in trajectory_paths.items():
+        for frame_idx in frame_indices:
+            atoms = ase_read(traj_path, index=frame_idx)
+            z, pos, box = tensors_from_atoms(atoms, device)
+            group_ids = infer_molecule_groups(z, pos, box=box).to(device)
+            num_molecules = int(group_ids.max().item()) + 1
+
+            for eval_name, model in models.items():
+                forces = _predict_forces(model, z, pos, box, device)
+                net_mag, internal_mag = decompose_forces(forces, group_ids, num_molecules)
+                raw_mag = forces.norm(dim=1).cpu().numpy()
+                share = float(internal_mag.mean() / raw_mag.mean())
+
+                row = {
+                    "trajectory": traj_label,
+                    "frame": frame_idx,
+                    "eval_model": eval_name,
+                    "raw_force_mag_mean": float(raw_mag.mean()),
+                    "net_force_mag_mean": float(net_mag.mean()),
+                    "internal_force_mag_mean": float(internal_mag.mean()),
+                    "internal_force_share": share,
+                }
+                rows.append(row)
+                print(
+                    f"{traj_label:16s} {frame_idx:<6d} {eval_name:28s} "
+                    f"{row['raw_force_mag_mean']:8.4f}   {row['net_force_mag_mean']:10.4f}   "
+                    f"{row['internal_force_mag_mean']:11.4f}   {share:.4f}"
+                )
+
+    print(
+        "\nRead this by fixing eval_model and comparing across frame (does a model's own "
+        "force behavior change as the geometry heats up?), then by fixing trajectory+frame and "
+        "comparing across eval_model (do the two models react differently to the SAME "
+        "geometry?). A frame-dependent divergence that's absent at frame 0 but grows at later "
+        "frames would support candidate mechanism 1 (paper/main.tex Section 5.3, sec:q3) - a "
+        "force-accuracy difference that only matters once the system leaves the training "
+        "distribution, invisible to both the static force MAE and the equilibrium-config check "
+        "above."
+    )
+
+    return rows
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mode",
+        choices=["equilibrium", "trajectory"],
+        default="equilibrium",
+        help="equilibrium (default, already run): held-out static DFT configs. "
+        "trajectory (new): real rollout.xyz frames, cross-evaluated under both models.",
+    )
     parser.add_argument("--ckpt-absolute", type=str, required=True)
     parser.add_argument("--ckpt-momentum", type=str, required=True)
     parser.add_argument("--data-root", type=str, default="./data")
-    parser.add_argument("--n-configs", type=int, default=6)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--n-configs", type=int, default=6, help="equilibrium mode only")
+    parser.add_argument("--seed", type=int, default=42, help="equilibrium mode only")
+    parser.add_argument("--traj-absolute", type=str, default=None,
+                         help="trajectory mode: path to water_absolute's rollout.xyz")
+    parser.add_argument("--traj-momentum", type=str, default=None,
+                         help="trajectory mode: path to water_absolute+momentum's rollout.xyz")
+    parser.add_argument("--frame-indices", type=str, default="0,20,80,180",
+                         help="trajectory mode: comma-separated frame indices (index i = step "
+                         "i*energy_log_stride the rollout was logged at)")
     args = parser.parse_args()
 
-    analyze(
-        ckpt_absolute=args.ckpt_absolute,
-        ckpt_momentum=args.ckpt_momentum,
-        data_root=args.data_root,
-        n_configs=args.n_configs,
-        seed=args.seed,
-    )
+    if args.mode == "equilibrium":
+        analyze(
+            ckpt_absolute=args.ckpt_absolute,
+            ckpt_momentum=args.ckpt_momentum,
+            data_root=args.data_root,
+            n_configs=args.n_configs,
+            seed=args.seed,
+        )
+    else:
+        if not args.traj_absolute or not args.traj_momentum:
+            parser.error("--mode trajectory requires both --traj-absolute and --traj-momentum")
+        frame_indices = [int(x) for x in args.frame_indices.split(",")]
+        analyze_trajectory_frames(
+            ckpt_absolute=args.ckpt_absolute,
+            ckpt_momentum=args.ckpt_momentum,
+            trajectory_paths={
+                "water_absolute": args.traj_absolute,
+                "water_absolute+momentum": args.traj_momentum,
+            },
+            frame_indices=frame_indices,
+        )
