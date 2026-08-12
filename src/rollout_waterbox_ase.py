@@ -164,8 +164,12 @@ def run_rollout(
         })
         trajectory_frames.append(atoms.copy())
 
+    # No manual pre-call needed here: ase/md/md.py's irun() already calls
+    # every attached observer once at nsteps==0 before the first integration
+    # step ("for historical reasons", per its own comment) - an explicit
+    # _record() call here duplicated that, producing an exact-duplicate
+    # step-0 row/frame (confirmed on the training box's first real output).
     dyn.attach(_record, interval=energy_log_stride)
-    _record()  # step 0, before any integration
 
     print(f"Running {steps} steps of {dt} fs NVE (VelocityVerlet), "
           f"logging every {energy_log_stride} steps...")
