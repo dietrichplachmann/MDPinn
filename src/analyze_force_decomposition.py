@@ -121,12 +121,21 @@ def decompose_forces(forces, group_ids, num_molecules):
     return net_force_mag.cpu().numpy(), internal_force_mag.cpu().numpy()
 
 
-def analyze(ckpt_absolute, ckpt_momentum, data_root="./data", n_configs=6, seed=42, device=None):
+def load_models(ckpt_absolute, ckpt_momentum, device=None):
+    """Shared by analyze() and analyze_trajectory_frames() - also lets a
+    caller running many trajectory pairs (run_force_decomposition_study.py)
+    load each checkpoint once and reuse it, instead of reloading from disk
+    on every replicate."""
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    models = {
+    return {
         "water_absolute": load_waterbox_checkpoint(ckpt_absolute, device=device),
         "water_absolute+momentum": load_waterbox_checkpoint(ckpt_momentum, device=device),
     }
+
+
+def analyze(ckpt_absolute, ckpt_momentum, data_root="./data", n_configs=6, seed=42, device=None):
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    models = load_models(ckpt_absolute, ckpt_momentum, device)
 
     full_dataset = load_waterbox_dataset(data_root=data_root)
     _, _, test_data = random_split(full_dataset, seed=seed)
@@ -190,13 +199,20 @@ def analyze(ckpt_absolute, ckpt_momentum, data_root="./data", n_configs=6, seed=
     return summary
 
 
-def analyze_trajectory_frames(ckpt_absolute, ckpt_momentum, trajectory_paths, frame_indices, device=None):
+def analyze_trajectory_frames(
+    trajectory_paths,
+    frame_indices,
+    ckpt_absolute=None,
+    ckpt_momentum=None,
+    models=None,
+    device=None,
+    verbose=True,
+):
     """Cross-evaluate both models on real trajectory snapshots (not held-out
     static DFT configs) - tests candidate mechanism 1 (paper/main.tex Section
     5.3, sec:q3): does either model's force behavior diverge specifically at
     the hot, distorted geometries a real NVE rollout actually reaches, in a
-    way invisible at equilibrium (analyze()'s result above found no signal
-    there).
+    way invisible at equilibrium (analyze()'s result found no signal there).
 
     trajectory_paths: {label: path to a rollout.xyz} - e.g. one per
     condition's own rollout. Each labeled trajectory's frames are evaluated
@@ -209,17 +225,25 @@ def analyze_trajectory_frames(ckpt_absolute, ckpt_momentum, trajectory_paths, fr
     early (still near the starting geometry) to late (deep in the overheated
     plateau) to see whether any divergence is present from the start or only
     emerges as the geometry drifts.
+
+    Pass models=... (from load_models()) to reuse already-loaded checkpoints
+    across many calls (run_force_decomposition_study.py calls this once per
+    replicate trajectory pair) instead of reloading from disk every time;
+    otherwise ckpt_absolute/ckpt_momentum load fresh. verbose=False
+    suppresses the per-row prints, useful when a caller is aggregating many
+    calls' worth of rows itself.
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    models = {
-        "water_absolute": load_waterbox_checkpoint(ckpt_absolute, device=device),
-        "water_absolute+momentum": load_waterbox_checkpoint(ckpt_momentum, device=device),
-    }
+    if models is None:
+        if not ckpt_absolute or not ckpt_momentum:
+            raise ValueError("Provide either models=... (pre-loaded) or both ckpt_absolute and ckpt_momentum.")
+        models = load_models(ckpt_absolute, ckpt_momentum, device)
 
-    print(
-        f"{'trajectory':16s} {'frame':6s} {'eval_model':28s} {'raw |F|':10s} "
-        f"{'net |F_mol|':12s} {'internal |F|':13s} internal/raw"
-    )
+    if verbose:
+        print(
+            f"{'trajectory':16s} {'frame':6s} {'eval_model':28s} {'raw |F|':10s} "
+            f"{'net |F_mol|':12s} {'internal |F|':13s} internal/raw"
+        )
     rows = []
     for traj_label, traj_path in trajectory_paths.items():
         for frame_idx in frame_indices:
@@ -244,22 +268,24 @@ def analyze_trajectory_frames(ckpt_absolute, ckpt_momentum, trajectory_paths, fr
                     "internal_force_share": share,
                 }
                 rows.append(row)
-                print(
-                    f"{traj_label:16s} {frame_idx:<6d} {eval_name:28s} "
-                    f"{row['raw_force_mag_mean']:8.4f}   {row['net_force_mag_mean']:10.4f}   "
-                    f"{row['internal_force_mag_mean']:11.4f}   {share:.4f}"
-                )
+                if verbose:
+                    print(
+                        f"{traj_label:16s} {frame_idx:<6d} {eval_name:28s} "
+                        f"{row['raw_force_mag_mean']:8.4f}   {row['net_force_mag_mean']:10.4f}   "
+                        f"{row['internal_force_mag_mean']:11.4f}   {share:.4f}"
+                    )
 
-    print(
-        "\nRead this by fixing eval_model and comparing across frame (does a model's own "
-        "force behavior change as the geometry heats up?), then by fixing trajectory+frame and "
-        "comparing across eval_model (do the two models react differently to the SAME "
-        "geometry?). A frame-dependent divergence that's absent at frame 0 but grows at later "
-        "frames would support candidate mechanism 1 (paper/main.tex Section 5.3, sec:q3) - a "
-        "force-accuracy difference that only matters once the system leaves the training "
-        "distribution, invisible to both the static force MAE and the equilibrium-config check "
-        "above."
-    )
+    if verbose:
+        print(
+            "\nRead this by fixing eval_model and comparing across frame (does a model's own "
+            "force behavior change as the geometry heats up?), then by fixing trajectory+frame "
+            "and comparing across eval_model (do the two models react differently to the SAME "
+            "geometry?). A frame-dependent divergence that's absent at frame 0 but grows at "
+            "later frames would support candidate mechanism 1 (paper/main.tex Section 5.3, "
+            "sec:q3) - a force-accuracy difference that only matters once the system leaves the "
+            "training distribution, invisible to both the static force MAE and the "
+            "equilibrium-config check above."
+        )
 
     return rows
 
@@ -302,11 +328,11 @@ if __name__ == "__main__":
             parser.error("--mode trajectory requires both --traj-absolute and --traj-momentum")
         frame_indices = [int(x) for x in args.frame_indices.split(",")]
         analyze_trajectory_frames(
-            ckpt_absolute=args.ckpt_absolute,
-            ckpt_momentum=args.ckpt_momentum,
             trajectory_paths={
                 "water_absolute": args.traj_absolute,
                 "water_absolute+momentum": args.traj_momentum,
             },
             frame_indices=frame_indices,
+            ckpt_absolute=args.ckpt_absolute,
+            ckpt_momentum=args.ckpt_momentum,
         )
