@@ -55,10 +55,26 @@ from pathlib import Path
 
 from rollout_waterbox_ase import run_rollout
 
-CHECKPOINTS = {
-    "water_absolute": "checkpoints/waterbox_study/water_absolute/seed0/best_model.ckpt",
-    "water_absolute+momentum": "checkpoints/waterbox_study/water_absolute+momentum/seed0/best_model.ckpt",
-}
+
+def checkpoints_for_seed(train_seed):
+    """Which training seed's checkpoints to compare - default 0, matching
+    every rollout run in this study so far (paper/main.tex sec:q3-progress,
+    sec:q3). Seeds 1 and 5 are the ones where the STATIC per-fragment
+    momentum metric already favored water_absolute+momentum
+    (paper/main.tex sec:n6-update's per-seed data - seed 0, by contrast, was
+    one of the three where it favored water_absolute). If the mechanism
+    found for seed 0 is right, a "good" momentum seed here should show a
+    smaller or reversed rollout-stability effect, not the same one."""
+    return {
+        "water_absolute": f"checkpoints/waterbox_study/water_absolute/seed{train_seed}/best_model.ckpt",
+        "water_absolute+momentum":
+            f"checkpoints/waterbox_study/water_absolute+momentum/seed{train_seed}/best_model.ckpt",
+    }
+
+
+# Default (train_seed=0) - kept as a module-level constant for backward
+# compatibility with anything already relying on it.
+CHECKPOINTS = checkpoints_for_seed(0)
 
 # --vary velocity: fixed starting config, 5 velocity draws (already run).
 VELOCITY_SEEDS = [0, 1, 2, 3, 4]
@@ -91,8 +107,8 @@ METRIC_COLUMNS = [
 ]
 
 
-def _run_one(condition_name, ckpt, label, velocity_seed, test_config_index, steps, dt, temperature_k):
-    out_dir = OUT_ROOT / condition_name / label
+def _run_one(condition_name, ckpt, label, velocity_seed, test_config_index, steps, dt, temperature_k, out_root):
+    out_dir = out_root / condition_name / label
     result = run_rollout(
         ckpt=ckpt,
         steps=steps,
@@ -114,7 +130,7 @@ def _run_one(condition_name, ckpt, label, velocity_seed, test_config_index, step
     }
 
 
-def run_matrix(conditions, replicates, steps, dt, temperature_k, raw_csv):
+def run_matrix(conditions, replicates, steps, dt, temperature_k, raw_csv, out_root):
     """replicates: list of (label, velocity_seed, test_config_index) tuples -
     label is just used for the per-cell output directory name and log lines.
 
@@ -132,7 +148,8 @@ def run_matrix(conditions, replicates, steps, dt, temperature_k, raw_csv):
             print(f"\n=== {cell} ===")
             try:
                 row = _run_one(
-                    condition_name, ckpt, label, velocity_seed, test_config_index, steps, dt, temperature_k
+                    condition_name, ckpt, label, velocity_seed, test_config_index, steps, dt, temperature_k,
+                    out_root,
                 )
             except Exception as exc:
                 print(f"FAILED: {cell}: {exc}")
@@ -231,6 +248,18 @@ def main():
         help="Which replicate axis to sweep - see module docstring.",
     )
     parser.add_argument(
+        "--train-seed",
+        type=int,
+        default=0,
+        help="Which training seed's checkpoints to compare (default 0, matching every existing "
+        "rollout in this study). Seeds 1 and 5 are the ones where the STATIC per-fragment "
+        "momentum metric already favored water_absolute+momentum (paper/main.tex "
+        "sec:n6-update) - the natural check for whether seed 0's mechanism (sec:q3) "
+        "generalizes. Any --train-seed other than 0 writes to a separate "
+        "results/waterbox_rollout_study_seed<N>/ directory, so it never overwrites the "
+        "existing seed-0 results.",
+    )
+    parser.add_argument(
         "--smoke-test",
         action="store_true",
         help="1 condition (water_absolute), 1 replicate, 20 steps - confirm the plumbing "
@@ -241,40 +270,49 @@ def main():
     parser.add_argument("--temperature-k", type=float, default=300.0)
     args = parser.parse_args()
 
+    checkpoints = checkpoints_for_seed(args.train_seed)
+    results_root = (
+        RESULTS_ROOT if args.train_seed == 0 else Path(f"results/waterbox_rollout_study_seed{args.train_seed}")
+    )
+    out_root = results_root / "runs"
+
     if args.vary == "velocity":
         replicates = [(f"vseed{v}", v, FIXED_TEST_CONFIG_INDEX) for v in VELOCITY_SEEDS]
         # Unsuffixed filenames, matching the first batch already run and
         # analyzed - do not rename these, a prior batch's results already
-        # live at this exact path.
-        raw_csv = RESULTS_ROOT / "raw_results.csv"
-        summary_csv = RESULTS_ROOT / "summary_table.csv"
-        summary_md = RESULTS_ROOT / "summary_table.md"
+        # live at this exact path (only true when results_root is the
+        # default seed-0 path; a different --train-seed already lands in
+        # its own directory, so no collision either way).
+        raw_csv = results_root / "raw_results.csv"
+        summary_csv = results_root / "summary_table.csv"
+        summary_md = results_root / "summary_table.md"
         note = (
             "Identical starting geometry (DATA_SEED/test_config_index held fixed) - only the "
-            "initial Maxwell-Boltzmann velocity draw differs between replicates."
+            "initial Maxwell-Boltzmann velocity draw differs between replicates. "
+            f"train_seed={args.train_seed}."
         )
     else:
         replicates = [(f"cfg{c}", FIXED_VELOCITY_SEED, c) for c in CONFIG_INDICES]
-        raw_csv = RESULTS_ROOT / "raw_results_by_config.csv"
-        summary_csv = RESULTS_ROOT / "summary_table_by_config.csv"
-        summary_md = RESULTS_ROOT / "summary_table_by_config.md"
+        raw_csv = results_root / "raw_results_by_config.csv"
+        summary_csv = results_root / "summary_table_by_config.csv"
+        summary_md = results_root / "summary_table_by_config.md"
         note = (
             "Identical velocity draw (DATA_SEED/velocity_seed held fixed) - only the starting "
             "configuration (test_config_index) differs between replicates. Compare against "
             "summary_table.md's velocity-axis batch to see whether that batch's momentum-vs-"
-            "absolute separation is a property of the models or of the one configuration it was "
-            "run on."
+            f"absolute separation is a property of the models or of the one configuration it was "
+            f"run on. train_seed={args.train_seed}."
         )
 
     if args.smoke_test:
-        conditions = {"water_absolute": CHECKPOINTS["water_absolute"]}
+        conditions = {"water_absolute": checkpoints["water_absolute"]}
         replicates = replicates[:1]
         steps = 20
     else:
-        conditions = CHECKPOINTS
+        conditions = checkpoints
         steps = args.steps
 
-    rows, failed_cells = run_matrix(conditions, replicates, steps, args.dt, args.temperature_k, raw_csv)
+    rows, failed_cells = run_matrix(conditions, replicates, steps, args.dt, args.temperature_k, raw_csv, out_root)
     aggregate_results(rows, summary_csv, summary_md, note)
     if failed_cells:
         print(f"\n{len(failed_cells)} cell(s) failed and are NOT in the results above: {failed_cells}")
