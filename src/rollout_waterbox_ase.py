@@ -124,10 +124,12 @@ def run_rollout(
     dt=0.5,
     temperature_k=300.0,
     seed=42,
+    velocity_seed=None,
     test_config_index=0,
     energy_log_stride=10,
     rdf_rmax=6.0,
     rdf_nbins=200,
+    plateau_fraction=0.3,
     out=None,
 ):
     out_dir = Path(out) if out else RESULTS_ROOT
@@ -140,15 +142,18 @@ def run_rollout(
     atoms = atoms_from_waterbox_sample(sample)
     atoms.calc = TensorNetCalculator(ckpt)
 
-    # rng=... makes the initial velocity draw reproducible from --seed - without
-    # it, MaxwellBoltzmannDistribution pulls from whatever state numpy's global
-    # RNG happens to be in (confirmed against ase/md/velocitydistribution.py's
-    # source, not assumed). Needed for a fair cross-checkpoint comparison: two
-    # rollouts from the same starting config/seed should start from bit-identical
-    # velocities, not just the same target temperature - the first momentum-vs-
-    # absolute comparison run without this landed at 292K vs 335K, a real,
-    # avoidable confound on top of whatever the models themselves are doing.
-    MaxwellBoltzmannDistribution(atoms, temperature_K=temperature_k, rng=np.random.RandomState(seed))
+    # velocity_seed is deliberately a SEPARATE parameter from seed, not reused
+    # from it: seed also drives random_split above, which determines which
+    # physical configuration test_config_index actually refers to. Running
+    # multiple replicates to see how sensitive a rollout is to the initial
+    # velocity draw requires holding the starting GEOMETRY fixed (same seed)
+    # while varying only the velocity draw (velocity_seed) - conflating the
+    # two would silently change the starting structure between replicates,
+    # not just the velocities. Defaults to seed for single-run convenience
+    # (rerunning with the same --seed still reproduces the same rollout).
+    if velocity_seed is None:
+        velocity_seed = seed
+    MaxwellBoltzmannDistribution(atoms, temperature_K=temperature_k, rng=np.random.RandomState(velocity_seed))
     Stationary(atoms)
 
     dyn = VelocityVerlet(atoms, timestep=dt * units.fs)
@@ -204,6 +209,22 @@ def run_rollout(
         f"({drift_fraction * 100:.4f}% of total starting energy)"
     )
 
+    # "Plateau" temperature: mean/std over the tail plateau_fraction of logged
+    # rows, not the full trajectory - the runs seen so far heat rapidly for
+    # the first several hundred fs before settling into a (too-hot) band, so
+    # averaging over the whole trajectory would blend the transient into the
+    # settled regime. A tail window separates "how hot does this end up" from
+    # "how fast did it get there", needed to compare replicates/conditions on
+    # the former without the latter contaminating it.
+    tail_n = max(1, int(len(history) * plateau_fraction))
+    plateau_temps = np.array([row["temperature_k"] for row in history[-tail_n:]])
+    plateau_temperature_mean = float(plateau_temps.mean())
+    plateau_temperature_std = float(plateau_temps.std(ddof=1)) if len(plateau_temps) > 1 else 0.0
+    print(
+        f"Plateau temperature (last {plateau_fraction:.0%} of logged steps, n={tail_n}): "
+        f"{plateau_temperature_mean:.1f} +/- {plateau_temperature_std:.1f} K"
+    )
+
     reference_frames = _sample_reference_frames(full_dataset, seed=seed)
     # One rmax shared by every RDF call below, so every column in rdf.csv
     # lands on the same r-grid - computed from BOTH the rollout's (fixed,
@@ -235,6 +256,8 @@ def run_rollout(
         "rdf_path": str(rdf_path),
         "drift_ev_per_atom": float(drift_ev_per_atom),
         "drift_fraction": float(drift_fraction),
+        "plateau_temperature_mean": plateau_temperature_mean,
+        "plateau_temperature_std": plateau_temperature_std,
     }
 
 
@@ -247,7 +270,14 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, default=2000)
     parser.add_argument("--dt", type=float, default=0.5)
     parser.add_argument("--temperature-k", type=float, default=300.0)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=42,
+                         help="Controls the train/val/test split (which config test-config-index "
+                         "refers to) and the reference-frame sample. Keep fixed across replicates "
+                         "meant to share the same starting geometry.")
+    parser.add_argument("--velocity-seed", type=int, default=None,
+                         help="Controls only the initial Maxwell-Boltzmann velocity draw. Defaults "
+                         "to --seed if omitted. Vary this (holding --seed fixed) to get multiple "
+                         "replicates from the identical starting geometry.")
     parser.add_argument("--test-config-index", type=int, default=0)
     parser.add_argument("--energy-log-stride", type=int, default=10)
     parser.add_argument("--rdf-rmax", type=float, default=6.0)
@@ -262,6 +292,7 @@ if __name__ == "__main__":
         dt=args.dt,
         temperature_k=args.temperature_k,
         seed=args.seed,
+        velocity_seed=args.velocity_seed,
         test_config_index=args.test_config_index,
         energy_log_stride=args.energy_log_stride,
         rdf_rmax=args.rdf_rmax,
