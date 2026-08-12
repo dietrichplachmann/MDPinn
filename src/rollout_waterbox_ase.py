@@ -140,7 +140,15 @@ def run_rollout(
     atoms = atoms_from_waterbox_sample(sample)
     atoms.calc = TensorNetCalculator(ckpt)
 
-    MaxwellBoltzmannDistribution(atoms, temperature_K=temperature_k)
+    # rng=... makes the initial velocity draw reproducible from --seed - without
+    # it, MaxwellBoltzmannDistribution pulls from whatever state numpy's global
+    # RNG happens to be in (confirmed against ase/md/velocitydistribution.py's
+    # source, not assumed). Needed for a fair cross-checkpoint comparison: two
+    # rollouts from the same starting config/seed should start from bit-identical
+    # velocities, not just the same target temperature - the first momentum-vs-
+    # absolute comparison run without this landed at 292K vs 335K, a real,
+    # avoidable confound on top of whatever the models themselves are doing.
+    MaxwellBoltzmannDistribution(atoms, temperature_K=temperature_k, rng=np.random.RandomState(seed))
     Stationary(atoms)
 
     dyn = VelocityVerlet(atoms, timestep=dt * units.fs)
