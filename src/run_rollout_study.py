@@ -56,7 +56,7 @@ from pathlib import Path
 from rollout_waterbox_ase import run_rollout
 
 
-def checkpoints_for_seed(train_seed):
+def checkpoints_for_seed(train_seed, checkpoint_root="checkpoints/waterbox_study"):
     """Which training seed's checkpoints to compare - default 0, matching
     every rollout run in this study so far (paper/main.tex sec:q3-progress,
     sec:q3). Seeds 1 and 5 are the ones where the STATIC per-fragment
@@ -64,16 +64,22 @@ def checkpoints_for_seed(train_seed):
     (paper/main.tex sec:n6-update's per-seed data - seed 0, by contrast, was
     one of the three where it favored water_absolute). If the mechanism
     found for seed 0 is right, a "good" momentum seed here should show a
-    smaller or reversed rollout-stability effect, not the same one."""
+    smaller or reversed rollout-stability effect, not the same one.
+
+    checkpoint_root defaults to the original no-ZBL checkpoints
+    (checkpoints/waterbox_study) - pass "checkpoints/waterbox_study_zbl"
+    (main's --use-zbl-prior does this) to compare the ZBL-retrained
+    checkpoints instead (paper/main.tex sec:q4), matching
+    run_waterbox_study.py --use-zbl-prior's own separate checkpoint root."""
     return {
-        "water_absolute": f"checkpoints/waterbox_study/water_absolute/seed{train_seed}/best_model.ckpt",
+        "water_absolute": f"{checkpoint_root}/water_absolute/seed{train_seed}/best_model.ckpt",
         "water_absolute+momentum":
-            f"checkpoints/waterbox_study/water_absolute+momentum/seed{train_seed}/best_model.ckpt",
+            f"{checkpoint_root}/water_absolute+momentum/seed{train_seed}/best_model.ckpt",
     }
 
 
-# Default (train_seed=0) - kept as a module-level constant for backward
-# compatibility with anything already relying on it.
+# Default (train_seed=0, no ZBL) - kept as a module-level constant for
+# backward compatibility with anything already relying on it.
 CHECKPOINTS = checkpoints_for_seed(0)
 
 # --vary velocity: fixed starting config, 5 velocity draws (already run).
@@ -260,6 +266,14 @@ def main():
         "existing seed-0 results.",
     )
     parser.add_argument(
+        "--use-zbl-prior",
+        action="store_true",
+        help="Compare the ZBL-retrained checkpoints (checkpoints/waterbox_study_zbl/, from "
+        "run_waterbox_study.py --use-zbl-prior) instead of the original no-ZBL checkpoints "
+        "(paper/main.tex sec:q4). Writes to a separate results/waterbox_rollout_study_zbl.../ "
+        "root, so it never overwrites the existing no-ZBL rollout results.",
+    )
+    parser.add_argument(
         "--smoke-test",
         action="store_true",
         help="1 condition (water_absolute), 1 replicate, 20 steps - confirm the plumbing "
@@ -270,10 +284,15 @@ def main():
     parser.add_argument("--temperature-k", type=float, default=300.0)
     args = parser.parse_args()
 
-    checkpoints = checkpoints_for_seed(args.train_seed)
-    results_root = (
-        RESULTS_ROOT if args.train_seed == 0 else Path(f"results/waterbox_rollout_study_seed{args.train_seed}")
-    )
+    checkpoint_root = "checkpoints/waterbox_study_zbl" if args.use_zbl_prior else "checkpoints/waterbox_study"
+    checkpoints = checkpoints_for_seed(args.train_seed, checkpoint_root=checkpoint_root)
+
+    results_dir_name = "results/waterbox_rollout_study"
+    if args.use_zbl_prior:
+        results_dir_name += "_zbl"
+    if args.train_seed != 0:
+        results_dir_name += f"_seed{args.train_seed}"
+    results_root = RESULTS_ROOT if results_dir_name == "results/waterbox_rollout_study" else Path(results_dir_name)
     out_root = results_root / "runs"
 
     if args.vary == "velocity":
@@ -289,7 +308,7 @@ def main():
         note = (
             "Identical starting geometry (DATA_SEED/test_config_index held fixed) - only the "
             "initial Maxwell-Boltzmann velocity draw differs between replicates. "
-            f"train_seed={args.train_seed}."
+            f"train_seed={args.train_seed}, use_zbl_prior={args.use_zbl_prior}."
         )
     else:
         replicates = [(f"cfg{c}", FIXED_VELOCITY_SEED, c) for c in CONFIG_INDICES]
@@ -301,7 +320,7 @@ def main():
             "configuration (test_config_index) differs between replicates. Compare against "
             "summary_table.md's velocity-axis batch to see whether that batch's momentum-vs-"
             f"absolute separation is a property of the models or of the one configuration it was "
-            f"run on. train_seed={args.train_seed}."
+            f"run on. train_seed={args.train_seed}, use_zbl_prior={args.use_zbl_prior}."
         )
 
     if args.smoke_test:
