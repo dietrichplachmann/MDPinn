@@ -220,6 +220,32 @@ def _build_local_molecule_ids(full_dataset):
     return group_ids, summary["n_groups"]
 
 
+#  Bohr radius -> meters and eV -> Joules are the two factors ZBL needs to
+# bridge its own native-unit formula to this project's Angstrom/eV convention
+# (waterbox_data.py's positions/energies). Verified empirically, not just
+# taken on faith, via verify_zbl_units.py - this project has been burned
+# before by trusting a unit-conversion factor without checking it against
+# physical magnitudes first (the Bohr/Hartree mixup in waterbox_data.py; see
+# CLAUDE.md's Lessons). ZBL_CUTOFF_DISTANCE=2.0 A was chosen the same way:
+# verify_zbl_units.py shows it gives a large repulsive correction right at
+# the empirical short-range-collapse floors diagnose_short_range_collapse.py
+# found (paper/main.tex sec:q4), while staying near-zero at real equilibrium
+# non-bonded separations (O-O/H-H exactly 0, O-H hydrogen-bond distance only
+# 0.003 eV) - cutoffs of 2.5 A or more start leaking a non-negligible
+# correction into the hydrogen-bond distance itself (up to 0.30 eV at 5.0 A,
+# comparable to a real H-bond's own energy scale), which would fight the
+# bulk-water physics the network already learned correctly rather than only
+# fixing the missing short-range repulsion. A nonzero ZBL contribution AT the
+# covalent O-H bond length is expected and not a bug - ZBL is a blanket
+# pairwise addition with no concept of "this pair is a real bond" (same as
+# NequIP/MACE's own usage); the network is expected to learn to compensate
+# for it during training, same as the rest of the energy landscape.
+_ZBL_ANGSTROM_TO_METER = 1e-10
+_ZBL_EV_TO_JOULE = 1.602176634e-19
+ZBL_CUTOFF_DISTANCE = 2.0
+ZBL_MAX_NUM_NEIGHBORS = 128
+
+
 def train_waterbox_model(
     data_root="./data",
     batch_size=32,
@@ -247,6 +273,9 @@ def train_waterbox_model(
     anneal_epoch=None,
     post_anneal_energy_weight=None,
     post_anneal_force_weight=None,
+    use_zbl_prior=False,
+    zbl_cutoff_distance=ZBL_CUTOFF_DISTANCE,
+    zbl_max_num_neighbors=ZBL_MAX_NUM_NEIGHBORS,
     trainer_callbacks=None,
     trainer_kwargs=None,
 ):
@@ -265,6 +294,16 @@ def train_waterbox_model(
 
     momentum_weight=0.0 is the "water_absolute" condition; momentum_weight>0 is
     "water_absolute+momentum" - see module docstring for what that term checks.
+
+    use_zbl_prior=False (default) preserves every existing run's behavior
+    exactly (prior_model stays None, unchanged). When True, adds torchmdnet's
+    ZBL short-range repulsive prior (paper/main.tex sec:q4 - the fix for the
+    both-conditions rollout instability, contingent on
+    diagnose_short_range_collapse.py's finding that missing short-range
+    repulsion is at least a partial cause). zbl_cutoff_distance/
+    zbl_max_num_neighbors default to the empirically-checked values in
+    verify_zbl_units.py - see that script and the ZBL_CUTOFF_DISTANCE
+    constant's comment above for why 2.0 A, not the model's own 5.0 A cutoff.
     """
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
@@ -288,7 +327,26 @@ def train_waterbox_model(
 
     model_args = {
         "model": model_type,
-        "prior_model": None,
+        "prior_model": "ZBL" if use_zbl_prior else None,
+        "prior_args": {
+            "cutoff_distance": zbl_cutoff_distance,
+            "max_num_neighbors": zbl_max_num_neighbors,
+            # WaterBox's z field already stores literal atomic numbers (8/1),
+            # not a compacted 0-based type index (confirmed by every other
+            # z==8/z==1 check throughout this project - structural_metrics.py,
+            # rollout_waterbox_ase.py's ELEMENT_PAIRS) - so ZBL's own
+            # model-type-index -> real-atomic-number lookup table is just the
+            # identity, sized to match max_z below so every index the model
+            # can embed is covered.
+            "atomic_number": list(range(100)),
+            # Angstrom -> meters / eV -> Joules: this project's own position/
+            # energy convention (waterbox_data.py), bridged to ZBL's native
+            # SI-unit formula - see the module-level comment above
+            # ZBL_CUTOFF_DISTANCE for why these specific values, verified via
+            # verify_zbl_units.py rather than taken on faith.
+            "distance_scale": _ZBL_ANGSTROM_TO_METER,
+            "energy_scale": _ZBL_EV_TO_JOULE,
+        } if use_zbl_prior else None,
         "output_model": "Scalar",
         "load_model": None,
         "remove_ref_energy": False,
@@ -438,6 +496,9 @@ def train_waterbox_model(
             "train_loss": train_loss,
             "train_loss_arg": train_loss_arg,
             "momentum_weight": momentum_weight,
+            "use_zbl_prior": use_zbl_prior,
+            "zbl_cutoff_distance": zbl_cutoff_distance if use_zbl_prior else None,
+            "zbl_max_num_neighbors": zbl_max_num_neighbors if use_zbl_prior else None,
         },
         "num_molecules_per_system": num_molecules_per_system,
         "validation_metrics": val_metrics,
@@ -481,6 +542,13 @@ if __name__ == "__main__":
     parser.add_argument("--num-rbf", type=int, default=64)
     parser.add_argument("--checkpoint-name", type=str, default="best_model")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--use-zbl-prior", action="store_true",
+        help="Add torchmdnet's ZBL short-range repulsive prior (paper/main.tex sec:q4). "
+        "Default off, so existing runs stay reproducible unless explicitly requested.",
+    )
+    parser.add_argument("--zbl-cutoff-distance", type=float, default=ZBL_CUTOFF_DISTANCE)
+    parser.add_argument("--zbl-max-num-neighbors", type=int, default=ZBL_MAX_NUM_NEIGHBORS)
     args = parser.parse_args()
 
     train_waterbox_model(
@@ -488,6 +556,9 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         num_epochs=args.epochs,
         lr=args.lr,
+        use_zbl_prior=args.use_zbl_prior,
+        zbl_cutoff_distance=args.zbl_cutoff_distance,
+        zbl_max_num_neighbors=args.zbl_max_num_neighbors,
         momentum_weight=args.momentum_weight,
         embedding_dimension=args.embedding_dimension,
         num_layers=args.num_layers,

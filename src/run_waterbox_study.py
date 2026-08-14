@@ -135,9 +135,26 @@ FIXED_HPARAMS = dict(
 CHECKPOINT_ROOT = Path("checkpoints/waterbox_study")
 LOG_ROOT = Path("logs/waterbox_study")
 RESULTS_ROOT = Path("results/waterbox_study")
-RAW_RESULTS_CSV = RESULTS_ROOT / "raw_results.csv"
-SUMMARY_CSV = RESULTS_ROOT / "summary_table.csv"
-SUMMARY_MD = RESULTS_ROOT / "summary_table.md"
+
+
+def _roots(use_zbl_prior):
+    """--use-zbl-prior redirects every path to a separate "_zbl"-suffixed
+    root (checkpoints/waterbox_study_zbl/, etc.) rather than reusing the
+    existing waterbox_study/ paths - the same pattern run_rollout_study.py
+    already uses for --train-seed, and for the same reason: _run_training's
+    checkpoint-exists skip means re-running this script normally wouldn't
+    retrain anything (checkpoints already exist), and --force-retrain would
+    silently overwrite the existing no-ZBL reference checkpoints/results
+    every other part of this study (and the paper) already depends on.
+    Keeping this purely additive means the existing results stay intact
+    regardless of what the ZBL retrain finds."""
+    if not use_zbl_prior:
+        return CHECKPOINT_ROOT, LOG_ROOT, RESULTS_ROOT
+    return (
+        Path(f"{CHECKPOINT_ROOT}_zbl"),
+        Path(f"{LOG_ROOT}_zbl"),
+        Path(f"{RESULTS_ROOT}_zbl"),
+    )
 
 METRIC_COLUMNS = [
     "energy_mae",
@@ -149,9 +166,10 @@ METRIC_COLUMNS = [
 ]
 
 
-def _run_training(condition_name, condition_kwargs, seed, num_epochs, force_retrain=False):
-    save_dir = CHECKPOINT_ROOT / condition_name / f"seed{seed}"
-    log_dir = LOG_ROOT / condition_name / f"seed{seed}"
+def _run_training(condition_name, condition_kwargs, seed, num_epochs, checkpoint_root, log_root,
+                   extra_hparams=None, force_retrain=False):
+    save_dir = checkpoint_root / condition_name / f"seed{seed}"
+    log_dir = log_root / condition_name / f"seed{seed}"
     ckpt_path = save_dir / "best_model.ckpt"
     if ckpt_path.exists() and not force_retrain:
         print(f"  Checkpoint already exists at {ckpt_path} - skipping training "
@@ -161,6 +179,7 @@ def _run_training(condition_name, condition_kwargs, seed, num_epochs, force_retr
     hparams = dict(FIXED_HPARAMS)
     hparams["num_epochs"] = num_epochs
     hparams.update(CONDITION_HPARAM_OVERRIDES.get(condition_name, {}))
+    hparams.update(extra_hparams or {})
     train_waterbox_model(
         save_dir=str(save_dir),
         log_dir=str(log_dir),
@@ -190,7 +209,8 @@ def _evaluate_checkpoint(save_dir, seed):
     }
 
 
-def run_matrix(conditions, seeds, num_epochs, force_retrain=False):
+def run_matrix(conditions, seeds, num_epochs, checkpoint_root, log_root, raw_results_csv,
+                extra_hparams=None, force_retrain=False):
     """Train+evaluate every (condition, seed) cell. Resilient to a single cell
     failing (full traceback printed, cell recorded as failed, matrix continues)
     and rewrites raw_results.csv after every completed cell - same lessons as
@@ -206,7 +226,10 @@ def run_matrix(conditions, seeds, num_epochs, force_retrain=False):
             cell = f"{condition_name}/seed{seed}"
             print(f"\n=== {cell} ===")
             try:
-                save_dir = _run_training(condition_name, condition_kwargs, seed, num_epochs, force_retrain=force_retrain)
+                save_dir = _run_training(
+                    condition_name, condition_kwargs, seed, num_epochs, checkpoint_root, log_root,
+                    extra_hparams=extra_hparams, force_retrain=force_retrain,
+                )
                 metrics = _evaluate_checkpoint(save_dir, seed)
             except Exception as exc:
                 print(f"FAILED: {cell}: {exc}")
@@ -215,7 +238,7 @@ def run_matrix(conditions, seeds, num_epochs, force_retrain=False):
                 continue
             row = {"condition": condition_name, "seed": seed, **metrics}
             rows.append(row)
-            _write_raw_results_csv(rows, RAW_RESULTS_CSV)
+            _write_raw_results_csv(rows, raw_results_csv)
 
     if failed:
         print("\nFailed cells (full tracebacks above) - fix and re-run; already-completed cells are safe:")
@@ -236,7 +259,7 @@ def _write_raw_results_csv(rows, path):
     print(f"Wrote: {path}")
 
 
-def aggregate_results(rows, summary_csv=SUMMARY_CSV, summary_md=SUMMARY_MD):
+def aggregate_results(rows, summary_csv, summary_md):
     """Group by condition and compute mean +/- std across seeds. Plain stdlib
     (statistics module), not pandas - matches run_ablation_study.py's choice,
     since pandas isn't a confirmed dependency anywhere in this project."""
@@ -317,6 +340,19 @@ def main():
         action="store_true",
         help="Retrain every cell even if a checkpoint already exists.",
     )
+    parser.add_argument(
+        "--use-zbl-prior",
+        action="store_true",
+        help="Retrain both conditions with torchmdnet's ZBL short-range repulsive prior added "
+        "(paper/main.tex sec:q4 - the fix for the both-conditions rollout instability, "
+        "contingent on diagnose_short_range_collapse.py's finding). Writes to a SEPARATE "
+        "checkpoints/waterbox_study_zbl//logs/waterbox_study_zbl//results/waterbox_study_zbl/ "
+        "root - never touches the existing no-ZBL checkpoints/results.",
+    )
+    parser.add_argument("--zbl-cutoff-distance", type=float, default=None,
+                         help="Override train_waterbox.ZBL_CUTOFF_DISTANCE's default. Only used with --use-zbl-prior.")
+    parser.add_argument("--zbl-max-num-neighbors", type=int, default=None,
+                         help="Override train_waterbox.ZBL_MAX_NUM_NEIGHBORS's default. Only used with --use-zbl-prior.")
     args = parser.parse_args()
 
     if args.smoke_test:
@@ -328,8 +364,24 @@ def main():
         seeds = SEEDS
         num_epochs = FIXED_HPARAMS["num_epochs"]
 
-    rows, failed_cells = run_matrix(conditions, seeds, num_epochs, force_retrain=args.force_retrain)
-    aggregate_results(rows)
+    checkpoint_root, log_root, results_root = _roots(args.use_zbl_prior)
+    raw_results_csv = results_root / "raw_results.csv"
+    summary_csv = results_root / "summary_table.csv"
+    summary_md = results_root / "summary_table.md"
+
+    extra_hparams = {}
+    if args.use_zbl_prior:
+        extra_hparams["use_zbl_prior"] = True
+        if args.zbl_cutoff_distance is not None:
+            extra_hparams["zbl_cutoff_distance"] = args.zbl_cutoff_distance
+        if args.zbl_max_num_neighbors is not None:
+            extra_hparams["zbl_max_num_neighbors"] = args.zbl_max_num_neighbors
+
+    rows, failed_cells = run_matrix(
+        conditions, seeds, num_epochs, checkpoint_root, log_root, raw_results_csv,
+        extra_hparams=extra_hparams, force_retrain=args.force_retrain,
+    )
+    aggregate_results(rows, summary_csv, summary_md)
     if failed_cells:
         print(f"\n{len(failed_cells)} cell(s) failed and are NOT in the results above: {failed_cells}")
         print("Fix the underlying issue and re-run - completed cells will be skipped, not redone.")
