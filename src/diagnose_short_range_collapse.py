@@ -26,24 +26,43 @@ waterbox_data.py - is reason enough not to trust a constant without checking
 it against real data first): a sample of reference configurations from the
 raw WaterBox dataset (real DFT liquid water, never overheated) establishes a
 per-element-pair-type (O-O/O-H/H-H) floor - the closest a real ~300K liquid
-water configuration in this dataset actually gets. Non-bonded O-H excludes
-each molecule's own two covalent bonds (inferred once per config via
-structural_metrics.infer_bonds, the same distance-based bond inference used
-throughout this project) - without that exclusion the O-H floor would just
-be the ~0.96-1.0 A covalent bond length, which is short by design and not
-what "anomalous" means here. O-O and H-H need no such exclusion: this
-project only ever infers intramolecular O-H bonds.
+water configuration in this dataset actually gets.
+
+Two calibration bugs were caught (and fixed here) by actually inspecting a
+first run's output rather than trusting a plausible-looking summary table:
+every single one of 42 trajectories reported its first sub-floor event at
+frame 0 (t=0), the real, unheated DFT starting snapshot itself, before any
+dynamics happened at all - impossible if the floor genuinely meant "an
+anomaly caused by the model's own dynamics." Root causes:
+
+1. Excluding only literal covalent bonds isn't enough for H-H: a water
+   molecule's own two hydrogens sit ~1.5 A apart purely from the H-O-H bond
+   angle, with no bond between them - a normal geometric fact, not a close
+   contact. Fixed by excluding same-MOLECULE pairs (via
+   structural_metrics.infer_molecule_groups), not just literal bonds -
+   correctly excludes intramolecular H-H as well as the O-H covalent bonds,
+   in one consistent step.
+2. The floor itself was originally a percentile over every distance pooled
+   across ~200 reference configs (each with thousands of pairs) - then each
+   rollout frame's own MINIMUM (over its own thousands of pairs) was checked
+   against that pooled percentile. That's an apples-to-oranges comparison:
+   the minimum of a few thousand draws will land below a threshold that only
+   excludes 0.1% of a much larger pool almost regardless of whether anything
+   is actually wrong. Fixed by computing each reference config's OWN minimum
+   distance first, pooling THOSE ~200 per-config minima, and taking a
+   percentile of that - the same statistic (per-configuration minimum) on
+   both sides of the comparison.
 
 Periodicity: distances use this project's own minimum-image convention
 (delta - box_lengths * round(delta / box_lengths), mirroring
 baseline_potential._infer_bonds_from_positions exactly, not a fresh
 convention invented for this script) rather than ase.geometry.get_distances -
 this keeps the core numeric logic (pairwise_min_image_distances,
-element_pair_nonbonded_distances, bonded_pair_set, analyze_trajectory's onset
-math) plain numpy/torch, exercisable with synthetic arrays even without
-ase/torchmdnet installed (this checkout has neither - see CLAUDE.md). Only
-the I/O layer (ase.io.read on rollout.xyz, load_waterbox_dataset for the
-reference floor) needs the training box.
+molecule_group_ids, element_pair_intermolecular_distances,
+analyze_trajectory's onset math) plain numpy/torch, exercisable with
+synthetic arrays even without ase/torchmdnet installed (this checkout has
+neither - see CLAUDE.md). Only the I/O layer (ase.io.read on rollout.xyz,
+load_waterbox_dataset for the reference floor) needs the training box.
 
 Frame/history alignment: rollout_waterbox_ase.py's run_rollout appends to
 both `history` (-> energy_history.csv) and `trajectory_frames` (->
@@ -87,37 +106,42 @@ def pairwise_min_image_distances(positions: np.ndarray, box_lengths: np.ndarray)
     return np.linalg.norm(delta, axis=-1)
 
 
-def bonded_pair_set(z: np.ndarray, positions: np.ndarray, box_lengths: np.ndarray) -> set[tuple[int, int]]:
-    """Bonds inferred via structural_metrics.infer_bonds (reused, not
-    reinvented) on one geometry - intended for frame 0 of a rollout (the real
-    DFT starting configuration) or an individual reference config, since
-    distance-based bond inference isn't expected to stay meaningful once a
-    rollout is already deep in its overheated plateau (a real water molecule
-    doesn't dissociate on this timescale, so treating topology as fixed from
-    a trustworthy frame is the right simplification, matching how
-    per_fragment_momentum_loss/infer_molecule_groups elsewhere in this
-    project already treat "per-molecule" as an assignment fixed at grouping
-    time). Returns an order-independent set of (min(i,j), max(i,j)) tuples."""
-    from structural_metrics import infer_bonds
+def molecule_group_ids(z: np.ndarray, positions: np.ndarray, box_lengths: np.ndarray) -> np.ndarray:
+    """Per-atom molecule id via structural_metrics.infer_molecule_groups
+    (reused, not reinvented) on one geometry - intended for frame 0 of a
+    rollout (the real DFT starting configuration) or an individual reference
+    config, since distance-based bond inference isn't expected to stay
+    meaningful once a rollout is already deep in its overheated plateau (a
+    real water molecule doesn't dissociate on this timescale, so treating
+    topology as fixed from a trustworthy frame is the right simplification,
+    matching how per_fragment_momentum_loss elsewhere in this project
+    already treats "per-molecule" as an assignment fixed at grouping time).
+    Returns an (N,) int array of group ids."""
+    from structural_metrics import infer_molecule_groups
 
     z_t = torch.as_tensor(z, dtype=torch.long)
     pos_t = torch.as_tensor(positions, dtype=torch.float32)
     box_t = torch.diag(torch.as_tensor(box_lengths, dtype=torch.float32))
-    bonds = infer_bonds(z_t, pos_t, box=box_t)
-    return {(min(i, j), max(i, j)) for i, j in bonds}
+    return infer_molecule_groups(z_t, pos_t, box=box_t).cpu().numpy()
 
 
-def bonded_mask_from_pairs(n_atoms: int, bonded_pairs: set[tuple[int, int]]) -> np.ndarray:
-    mask = np.zeros((n_atoms, n_atoms), dtype=bool)
-    for i, j in bonded_pairs:
-        mask[i, j] = True
-        mask[j, i] = True
-    return mask
+def same_molecule_mask(group_ids: np.ndarray) -> np.ndarray:
+    """(N,N) boolean mask, True where atoms i,j belong to the same molecule
+    group - covers both the O-H covalent bonds AND each molecule's own
+    (non-bonded) H...H pair in one consistent check, unlike excluding only
+    literal bonds (see module docstring, calibration bug 1). Also covers
+    self-pairs (i==j is always "same molecule" as itself), so no separate
+    diagonal-exclusion step is needed."""
+    return group_ids[:, None] == group_ids[None, :]
 
 
-def element_pair_nonbonded_distances(z: np.ndarray, dist_matrix: np.ndarray, bonded_mask: np.ndarray) -> dict:
-    """Returns {pair_name: 1-D array of non-bonded distances for that
-    element-pair type in this one frame}. Vectorized (no Python loop over
+def element_pair_intermolecular_distances(z: np.ndarray, dist_matrix: np.ndarray, same_molecule: np.ndarray) -> dict:
+    """Returns {pair_name: 1-D array of cross-molecule distances for that
+    element-pair type in this one frame} - i.e. distances between atoms in
+    DIFFERENT molecules, the physically relevant quantity for "did this
+    configuration get anomalously close in a way missing short-range
+    repulsion would matter for" (an intramolecular O-H bond or H...H isn't
+    what ZBL-style priors are meant to fix). Vectorized (no Python loop over
     atoms/pairs - see this project's own "vectorize anything called once per
     [hot loop]" lesson, which applies just as much to a per-frame scan over
     every trajectory as to a training batch). Each unordered pair appears
@@ -128,9 +152,7 @@ def element_pair_nonbonded_distances(z: np.ndarray, dist_matrix: np.ndarray, bon
         idx_a = np.where(z == za)[0]
         idx_b = np.where(z == zb)[0]
         sub = dist_matrix[np.ix_(idx_a, idx_b)]
-        mask = bonded_mask[np.ix_(idx_a, idx_b)].copy()
-        if za == zb:
-            mask |= idx_a[:, None] == idx_b[None, :]  # exclude self-distance
+        mask = same_molecule[np.ix_(idx_a, idx_b)]
         out[name] = sub[~mask]
     return out
 
@@ -139,15 +161,27 @@ def compute_reference_floors(
     data_root: str = "./data",
     n_reference_configs: int = 200,
     seed: int = 42,
-    floor_percentile: float = 0.1,
+    floor_percentile: float = 1.0,
 ):
     """Empirical "how close does real liquid water ever get" floor per
     element-pair type, from a random sample of the raw WaterBox dataset's own
-    test-split configurations (never overheated). Uses the floor_percentile
-    percentile rather than the absolute minimum, to avoid one config's
-    possible bond-mis-inference artifact (a missed real bond misread as an
-    anomalously-short non-bonded contact) setting the floor. Needs
-    torchmdnet - training-box only."""
+    test-split configurations (never overheated). For each reference config,
+    computes only that config's OWN minimum cross-molecule distance per
+    element-pair type (not every pairwise distance in the config) - the
+    floor is then a percentile over these ~n_reference_configs per-config
+    minima. This matters (calibration bug 2, module docstring): checking a
+    rollout frame's own minimum against a percentile of every individual
+    pairwise distance ever seen conflates "population percentile" with
+    "extreme-value/order-statistic" - the minimum of a few thousand pairs
+    almost always sits below a threshold defined to exclude only the bottom
+    0.1% of a much larger pool, regardless of whether anything is actually
+    anomalous. Comparing per-config minimum to per-config minimum keeps both
+    sides of the comparison the same statistic. floor_percentile defaults to
+    1.0 (1st percentile) rather than the old 0.1, appropriate now that the
+    pool is only ~n_reference_configs values (was thousands per config
+    before) - a lower percentile than that leaves too few reference samples
+    below it to be a stable estimate. Needs torchmdnet - training-box only.
+    """
     from waterbox_data import load_waterbox_dataset, random_split
 
     full_dataset = load_waterbox_dataset(data_root=data_root)
@@ -156,22 +190,27 @@ def compute_reference_floors(
     rng = np.random.default_rng(seed)
     indices = rng.choice(len(test_data), size=n, replace=False)
 
-    pooled = {name: [] for name, _, _ in ELEMENT_PAIRS}
+    per_config_minima = {name: [] for name, _, _ in ELEMENT_PAIRS}
     for idx in indices:
         sample = test_data[int(idx)]
         z = sample.z.detach().cpu().numpy()
         pos = sample.pos.detach().cpu().numpy()
         box_lengths = np.asarray(sample.box).reshape(3, 3).diagonal()
         dist = pairwise_min_image_distances(pos, box_lengths)
-        bonded_mask = bonded_mask_from_pairs(len(z), bonded_pair_set(z, pos, box_lengths))
-        for name, arr in element_pair_nonbonded_distances(z, dist, bonded_mask).items():
-            pooled[name].append(arr)
+        same_molecule = same_molecule_mask(molecule_group_ids(z, pos, box_lengths))
+        for name, arr in element_pair_intermolecular_distances(z, dist, same_molecule).items():
+            if arr.size:
+                per_config_minima[name].append(float(arr.min()))
 
     floors, stats = {}, {}
-    for name, arrs in pooled.items():
-        all_d = np.concatenate(arrs)
-        floors[name] = float(np.percentile(all_d, floor_percentile))
-        stats[name] = {"min": float(all_d.min()), "floor_value": floors[name], "n_samples": int(all_d.size)}
+    for name, minima in per_config_minima.items():
+        minima = np.asarray(minima)
+        floors[name] = float(np.percentile(minima, floor_percentile))
+        stats[name] = {
+            "min": float(minima.min()),
+            "floor_value": floors[name],
+            "n_reference_configs": int(minima.size),
+        }
     return floors, stats
 
 
@@ -227,14 +266,14 @@ def analyze_trajectory(traj_path, history_path, floors, plateau_fraction=0.3, on
     z = frames[0].get_atomic_numbers()
     pos0 = frames[0].get_positions()
     box_lengths0 = np.array(frames[0].get_cell()).diagonal()
-    bonded_mask = bonded_mask_from_pairs(len(z), bonded_pair_set(z, pos0, box_lengths0))
+    same_molecule = same_molecule_mask(molecule_group_ids(z, pos0, box_lengths0))
 
     rows = []
     for frame, hist_row in zip(frames, history):
         pos = frame.get_positions()
         box_lengths = np.array(frame.get_cell()).diagonal()
         dist = pairwise_min_image_distances(pos, box_lengths)
-        per_type = element_pair_nonbonded_distances(z, dist, bonded_mask)
+        per_type = element_pair_intermolecular_distances(z, dist, same_molecule)
         row = dict(hist_row)
         for name, arr in per_type.items():
             row[f"min_dist_{name}"] = float(arr.min()) if arr.size else float("nan")
@@ -322,8 +361,8 @@ def _write_summary_markdown(summary_rows, path, floors, floor_stats, floor_perce
     ]
     for name, stat in floor_stats.items():
         lines.append(
-            f"- {name}: floor = {floors[name]:.4f} A (true min observed = {stat['min']:.4f} A, "
-            f"n={stat['n_samples']})"
+            f"- {name}: floor = {floors[name]:.4f} A (true min of per-config minima = {stat['min']:.4f} A, "
+            f"n_reference_configs={stat['n_reference_configs']})"
         )
     lines += [
         "",
@@ -347,7 +386,7 @@ def run_diagnostic(
     data_root="./data",
     out=None,
     n_reference_configs=200,
-    floor_percentile=0.1,
+    floor_percentile=1.0,
     plateau_fraction=0.3,
     onset_fraction=0.5,
     tolerance_frames=3,
@@ -363,8 +402,8 @@ def run_diagnostic(
     )
     for name, stat in floor_stats.items():
         print(
-            f"  {name}: floor (p{floor_percentile}) = {floors[name]:.4f} A, "
-            f"true min = {stat['min']:.4f} A, n={stat['n_samples']}"
+            f"  {name}: floor (p{floor_percentile} of per-config minima) = {floors[name]:.4f} A, "
+            f"true min of per-config minima = {stat['min']:.4f} A, n_reference_configs={stat['n_reference_configs']}"
         )
 
     trajectories = discover_trajectories(results_root)
@@ -445,7 +484,7 @@ if __name__ == "__main__":
     parser.add_argument("--data-root", type=str, default="./data")
     parser.add_argument("--out", type=str, default=None)
     parser.add_argument("--n-reference-configs", type=int, default=200)
-    parser.add_argument("--floor-percentile", type=float, default=0.1)
+    parser.add_argument("--floor-percentile", type=float, default=1.0)
     parser.add_argument("--plateau-fraction", type=float, default=0.3)
     parser.add_argument("--onset-fraction", type=float, default=0.5)
     parser.add_argument("--tolerance-frames", type=int, default=3)
