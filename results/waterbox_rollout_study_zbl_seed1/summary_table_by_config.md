@@ -4,5 +4,5 @@ n=5 replicates per condition. Identical velocity draw (DATA_SEED/velocity_seed h
 
 | condition | n_replicates | drift_ev_per_atom_mev | drift_fraction_pct | plateau_temperature_mean | plateau_temperature_std |
 | --- | --- | --- | --- | --- | --- |
-| water_absolute | 5 | 2.971e+06 +/- 5.5e+06 | 1901 +/- 3.5e+03 | 3.788e+06 +/- 7.4e+06 | 6.94e+06 +/- 1.3e+07 |
-| water_absolute+momentum | 5 | 4381 +/- 5e+03 | 2.802 +/- 3.2 | 8473 +/- 6.2e+03 | 5586 +/- 5.5e+03 |
+| water_absolute | 5 | -0.1373 +/- 0.029 | -8.78e-05 +/- 1.9e-05 | 4598 +/- 1.9e+02 | 170.1 +/- 29 |
+| water_absolute+momentum | 5 | -0.05427 +/- 0.082 | -3.472e-05 +/- 5.2e-05 | 2511 +/- 6.5e+02 | 266.1 +/- 53 |
