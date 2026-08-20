@@ -36,6 +36,7 @@ from diagnose_short_range_collapse import (
     pairwise_min_image_distances,
     same_molecule_mask,
 )
+from molecular_zbl import register_molecular_zbl_prior
 from physics_losses import per_fragment_momentum_loss
 from structural_metrics import infer_molecule_groups, summarize_molecule_groups
 from waterbox_data import load_waterbox_dataset, random_split
@@ -47,6 +48,15 @@ torch.load = lambda *args, **kwargs: _original_load(*args, **{**kwargs, "weights
 
 
 def load_waterbox_checkpoint(checkpoint_path, device="cpu"):
+    # Idempotent, unconditional: this is the ONE shared reload path used by
+    # this module, waterbox_ase.py's TensorNetCalculator (every rollout
+    # step), and analyze_force_decomposition.py - a checkpoint saved with
+    # prior_model="MolecularZBL" needs this name registered into
+    # torchmdnet.priors's own namespace before LNNP(hparams) below can
+    # reconstruct it, exactly as train_waterbox.py must do at construction
+    # time. Cheap no-op for checkpoints that don't use it.
+    register_molecular_zbl_prior()
+
     checkpoint = torch.load(checkpoint_path, map_location=device)
     if "hyper_parameters" in checkpoint:
         hparams = checkpoint["hyper_parameters"]

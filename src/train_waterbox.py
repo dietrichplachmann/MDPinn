@@ -45,6 +45,7 @@ from torch_geometric.loader import DataLoader as GeometricDataLoader
 
 from torchmdnet.module import LNNP
 
+from molecular_zbl import register_molecular_zbl_prior
 from physics_losses import build_global_molecule_ids, per_fragment_momentum_loss
 from structural_metrics import infer_molecule_groups, summarize_molecule_groups
 from training_history import MetricHistoryCallback
@@ -236,10 +237,19 @@ def _build_local_molecule_ids(full_dataset):
 # comparable to a real H-bond's own energy scale), which would fight the
 # bulk-water physics the network already learned correctly rather than only
 # fixing the missing short-range repulsion. A nonzero ZBL contribution AT the
-# covalent O-H bond length is expected and not a bug - ZBL is a blanket
-# pairwise addition with no concept of "this pair is a real bond" (same as
-# NequIP/MACE's own usage); the network is expected to learn to compensate
-# for it during training, same as the rest of the energy landscape.
+# covalent O-H bond length is a real, blanket pairwise addition with no
+# concept of "this pair is a real bond" (same as stock NequIP/MACE usage) -
+# and, per paper/main.tex sec:q4-negative-result, this is exactly what made
+# enabling stock ZBL substantially WORSEN rollout stability at two
+# independent training seeds, not fix it: the network never learned to
+# compensate for a ~2.6 eV correction dumped onto every O-H bond,
+# continuously, throughout the whole simulation. zbl_bonded_exclusion=True
+# (see molecular_zbl.py) fixes this by excluding same-molecule pairs from
+# the correction entirely, reusing the CHARMM/AMBER 1-2/1-3 nonbonded-
+# exclusion convention (paper/literature_review_candidates.md section 0) -
+# no MLIP framework checked (NequIP, MACE, GRACE) implements this; MACE-OFF
+# (MACE's own flagship for covalent organic chemistry) simply doesn't
+# enable ZBL at all.
 _ZBL_ANGSTROM_TO_METER = 1e-10
 _ZBL_EV_TO_JOULE = 1.602176634e-19
 ZBL_CUTOFF_DISTANCE = 2.0
@@ -276,6 +286,7 @@ def train_waterbox_model(
     use_zbl_prior=False,
     zbl_cutoff_distance=ZBL_CUTOFF_DISTANCE,
     zbl_max_num_neighbors=ZBL_MAX_NUM_NEIGHBORS,
+    zbl_bonded_exclusion=False,
     trainer_callbacks=None,
     trainer_kwargs=None,
 ):
@@ -304,6 +315,18 @@ def train_waterbox_model(
     zbl_max_num_neighbors default to the empirically-checked values in
     verify_zbl_units.py - see that script and the ZBL_CUTOFF_DISTANCE
     constant's comment above for why 2.0 A, not the model's own 5.0 A cutoff.
+
+    Stock ZBL (zbl_bonded_exclusion=False, the default when use_zbl_prior is
+    True) is confirmed to substantially WORSEN rollout stability rather than
+    fix it (paper/main.tex sec:q4-negative-result) - kept as the default only
+    for backward compatibility with that already-completed comparison, not
+    because it's recommended. zbl_bonded_exclusion=True switches to
+    molecular_zbl.MolecularZBL, which excludes same-molecule atom pairs from
+    the ZBL correction (see that module's docstring for why "same molecule"
+    is the exactly-correct exclusion criterion for this 3-atom-per-molecule
+    system, and paper/literature_review_candidates.md section 0 for why this
+    is the standard classical-force-field convention rather than something
+    invented for this project). Ignored when use_zbl_prior is False.
     """
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
@@ -325,28 +348,45 @@ def train_waterbox_model(
     val_loader = GeometricDataLoader(val_data, batch_size=batch_size, num_workers=num_workers)
     test_loader = GeometricDataLoader(test_data, batch_size=batch_size, num_workers=num_workers)
 
+    prior_args = {
+        "cutoff_distance": zbl_cutoff_distance,
+        "max_num_neighbors": zbl_max_num_neighbors,
+        # WaterBox's z field already stores literal atomic numbers (8/1),
+        # not a compacted 0-based type index (confirmed by every other
+        # z==8/z==1 check throughout this project - structural_metrics.py,
+        # rollout_waterbox_ase.py's ELEMENT_PAIRS) - so ZBL's own
+        # model-type-index -> real-atomic-number lookup table is just the
+        # identity, sized to match max_z below so every index the model
+        # can embed is covered.
+        "atomic_number": list(range(100)),
+        # Angstrom -> meters / eV -> Joules: this project's own position/
+        # energy convention (waterbox_data.py), bridged to ZBL's native
+        # SI-unit formula - see the module-level comment above
+        # ZBL_CUTOFF_DISTANCE for why these specific values, verified via
+        # verify_zbl_units.py rather than taken on faith.
+        "distance_scale": _ZBL_ANGSTROM_TO_METER,
+        "energy_scale": _ZBL_EV_TO_JOULE,
+    } if use_zbl_prior else None
+
+    if use_zbl_prior and zbl_bonded_exclusion:
+        # Registers "MolecularZBL" into torchmdnet.priors's own namespace so
+        # create_prior_models's name-based lookup resolves it - must happen
+        # before WaterLNNP(...) below constructs the model. See
+        # molecular_zbl.py's module docstring for why this same registration
+        # also has to happen at checkpoint-reload time
+        # (evaluate_waterbox.py's load_waterbox_checkpoint), not just here.
+        register_molecular_zbl_prior()
+        prior_model_name = "MolecularZBL"
+        prior_args["local_molecule_ids"] = local_molecule_ids.tolist()
+    elif use_zbl_prior:
+        prior_model_name = "ZBL"
+    else:
+        prior_model_name = None
+
     model_args = {
         "model": model_type,
-        "prior_model": "ZBL" if use_zbl_prior else None,
-        "prior_args": {
-            "cutoff_distance": zbl_cutoff_distance,
-            "max_num_neighbors": zbl_max_num_neighbors,
-            # WaterBox's z field already stores literal atomic numbers (8/1),
-            # not a compacted 0-based type index (confirmed by every other
-            # z==8/z==1 check throughout this project - structural_metrics.py,
-            # rollout_waterbox_ase.py's ELEMENT_PAIRS) - so ZBL's own
-            # model-type-index -> real-atomic-number lookup table is just the
-            # identity, sized to match max_z below so every index the model
-            # can embed is covered.
-            "atomic_number": list(range(100)),
-            # Angstrom -> meters / eV -> Joules: this project's own position/
-            # energy convention (waterbox_data.py), bridged to ZBL's native
-            # SI-unit formula - see the module-level comment above
-            # ZBL_CUTOFF_DISTANCE for why these specific values, verified via
-            # verify_zbl_units.py rather than taken on faith.
-            "distance_scale": _ZBL_ANGSTROM_TO_METER,
-            "energy_scale": _ZBL_EV_TO_JOULE,
-        } if use_zbl_prior else None,
+        "prior_model": prior_model_name,
+        "prior_args": prior_args,
         "output_model": "Scalar",
         "load_model": None,
         "remove_ref_energy": False,
@@ -499,6 +539,7 @@ def train_waterbox_model(
             "use_zbl_prior": use_zbl_prior,
             "zbl_cutoff_distance": zbl_cutoff_distance if use_zbl_prior else None,
             "zbl_max_num_neighbors": zbl_max_num_neighbors if use_zbl_prior else None,
+            "zbl_bonded_exclusion": zbl_bonded_exclusion if use_zbl_prior else None,
         },
         "num_molecules_per_system": num_molecules_per_system,
         "validation_metrics": val_metrics,
@@ -545,10 +586,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use-zbl-prior", action="store_true",
         help="Add torchmdnet's ZBL short-range repulsive prior (paper/main.tex sec:q4). "
-        "Default off, so existing runs stay reproducible unless explicitly requested.",
+        "Default off, so existing runs stay reproducible unless explicitly requested. "
+        "Stock ZBL (without --zbl-bonded-exclusion) is confirmed to substantially WORSEN "
+        "rollout stability (paper/main.tex sec:q4-negative-result) - pass "
+        "--zbl-bonded-exclusion too unless deliberately reproducing that already-completed "
+        "negative-result comparison.",
     )
     parser.add_argument("--zbl-cutoff-distance", type=float, default=ZBL_CUTOFF_DISTANCE)
     parser.add_argument("--zbl-max-num-neighbors", type=int, default=ZBL_MAX_NUM_NEIGHBORS)
+    parser.add_argument(
+        "--zbl-bonded-exclusion", action="store_true",
+        help="Use molecular_zbl.MolecularZBL instead of stock ZBL - excludes same-molecule "
+        "atom pairs from the repulsive correction (see molecular_zbl.py). Only takes effect "
+        "with --use-zbl-prior.",
+    )
     args = parser.parse_args()
 
     train_waterbox_model(
@@ -559,6 +610,7 @@ if __name__ == "__main__":
         use_zbl_prior=args.use_zbl_prior,
         zbl_cutoff_distance=args.zbl_cutoff_distance,
         zbl_max_num_neighbors=args.zbl_max_num_neighbors,
+        zbl_bonded_exclusion=args.zbl_bonded_exclusion,
         momentum_weight=args.momentum_weight,
         embedding_dimension=args.embedding_dimension,
         num_layers=args.num_layers,

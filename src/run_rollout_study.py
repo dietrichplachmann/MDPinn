@@ -271,7 +271,18 @@ def main():
         help="Compare the ZBL-retrained checkpoints (checkpoints/waterbox_study_zbl/, from "
         "run_waterbox_study.py --use-zbl-prior) instead of the original no-ZBL checkpoints "
         "(paper/main.tex sec:q4). Writes to a separate results/waterbox_rollout_study_zbl.../ "
-        "root, so it never overwrites the existing no-ZBL rollout results.",
+        "root, so it never overwrites the existing no-ZBL rollout results. Combine with "
+        "--zbl-bonded-exclusion to compare the bonded-exclusion variant instead of stock ZBL "
+        "(paper/main.tex sec:q4-negative-result already found stock ZBL substantially worsens "
+        "stability - not the comparison you want unless deliberately reproducing that).",
+    )
+    parser.add_argument(
+        "--zbl-bonded-exclusion",
+        action="store_true",
+        help="Compare the bonded-exclusion ZBL checkpoints (checkpoints/waterbox_study_zbl_bonded/, "
+        "from run_waterbox_study.py --use-zbl-prior --zbl-bonded-exclusion) instead of stock ZBL. "
+        "Only takes effect with --use-zbl-prior. Writes to a further-separate "
+        "results/waterbox_rollout_study_zbl_bonded.../ root.",
     )
     parser.add_argument(
         "--smoke-test",
@@ -284,12 +295,17 @@ def main():
     parser.add_argument("--temperature-k", type=float, default=300.0)
     args = parser.parse_args()
 
-    checkpoint_root = "checkpoints/waterbox_study_zbl" if args.use_zbl_prior else "checkpoints/waterbox_study"
+    if not args.use_zbl_prior:
+        checkpoint_root = "checkpoints/waterbox_study"
+    elif args.zbl_bonded_exclusion:
+        checkpoint_root = "checkpoints/waterbox_study_zbl_bonded"
+    else:
+        checkpoint_root = "checkpoints/waterbox_study_zbl"
     checkpoints = checkpoints_for_seed(args.train_seed, checkpoint_root=checkpoint_root)
 
     results_dir_name = "results/waterbox_rollout_study"
     if args.use_zbl_prior:
-        results_dir_name += "_zbl"
+        results_dir_name += "_zbl_bonded" if args.zbl_bonded_exclusion else "_zbl"
     if args.train_seed != 0:
         results_dir_name += f"_seed{args.train_seed}"
     results_root = RESULTS_ROOT if results_dir_name == "results/waterbox_rollout_study" else Path(results_dir_name)
@@ -308,7 +324,7 @@ def main():
         note = (
             "Identical starting geometry (DATA_SEED/test_config_index held fixed) - only the "
             "initial Maxwell-Boltzmann velocity draw differs between replicates. "
-            f"train_seed={args.train_seed}, use_zbl_prior={args.use_zbl_prior}."
+            f"train_seed={args.train_seed}, use_zbl_prior={args.use_zbl_prior}, zbl_bonded_exclusion={args.zbl_bonded_exclusion}."
         )
     else:
         replicates = [(f"cfg{c}", FIXED_VELOCITY_SEED, c) for c in CONFIG_INDICES]
@@ -320,7 +336,7 @@ def main():
             "configuration (test_config_index) differs between replicates. Compare against "
             "summary_table.md's velocity-axis batch to see whether that batch's momentum-vs-"
             f"absolute separation is a property of the models or of the one configuration it was "
-            f"run on. train_seed={args.train_seed}, use_zbl_prior={args.use_zbl_prior}."
+            f"run on. train_seed={args.train_seed}, use_zbl_prior={args.use_zbl_prior}, zbl_bonded_exclusion={args.zbl_bonded_exclusion}."
         )
 
     if args.smoke_test:

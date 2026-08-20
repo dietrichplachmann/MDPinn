@@ -137,7 +137,7 @@ LOG_ROOT = Path("logs/waterbox_study")
 RESULTS_ROOT = Path("results/waterbox_study")
 
 
-def _roots(use_zbl_prior):
+def _roots(use_zbl_prior, zbl_bonded_exclusion=False):
     """--use-zbl-prior redirects every path to a separate "_zbl"-suffixed
     root (checkpoints/waterbox_study_zbl/, etc.) rather than reusing the
     existing waterbox_study/ paths - the same pattern run_rollout_study.py
@@ -147,13 +147,19 @@ def _roots(use_zbl_prior):
     silently overwrite the existing no-ZBL reference checkpoints/results
     every other part of this study (and the paper) already depends on.
     Keeping this purely additive means the existing results stay intact
-    regardless of what the ZBL retrain finds."""
+    regardless of what the ZBL retrain finds.
+
+    --zbl-bonded-exclusion adds a further "_bonded" suffix
+    (checkpoints/waterbox_study_zbl_bonded/, etc.) - a separate root again,
+    so the already-completed stock-ZBL negative-result comparison
+    (paper/main.tex sec:q4-negative-result) is never overwritten either."""
     if not use_zbl_prior:
         return CHECKPOINT_ROOT, LOG_ROOT, RESULTS_ROOT
+    suffix = "_zbl_bonded" if zbl_bonded_exclusion else "_zbl"
     return (
-        Path(f"{CHECKPOINT_ROOT}_zbl"),
-        Path(f"{LOG_ROOT}_zbl"),
-        Path(f"{RESULTS_ROOT}_zbl"),
+        Path(f"{CHECKPOINT_ROOT}{suffix}"),
+        Path(f"{LOG_ROOT}{suffix}"),
+        Path(f"{RESULTS_ROOT}{suffix}"),
     )
 
 METRIC_COLUMNS = [
@@ -347,12 +353,24 @@ def main():
         "(paper/main.tex sec:q4 - the fix for the both-conditions rollout instability, "
         "contingent on diagnose_short_range_collapse.py's finding). Writes to a SEPARATE "
         "checkpoints/waterbox_study_zbl//logs/waterbox_study_zbl//results/waterbox_study_zbl/ "
-        "root - never touches the existing no-ZBL checkpoints/results.",
+        "root - never touches the existing no-ZBL checkpoints/results. Stock ZBL (without "
+        "--zbl-bonded-exclusion) is confirmed to substantially WORSEN rollout stability "
+        "(paper/main.tex sec:q4-negative-result) - pass --zbl-bonded-exclusion too unless "
+        "deliberately reproducing that already-completed negative-result comparison.",
     )
     parser.add_argument("--zbl-cutoff-distance", type=float, default=None,
                          help="Override train_waterbox.ZBL_CUTOFF_DISTANCE's default. Only used with --use-zbl-prior.")
     parser.add_argument("--zbl-max-num-neighbors", type=int, default=None,
                          help="Override train_waterbox.ZBL_MAX_NUM_NEIGHBORS's default. Only used with --use-zbl-prior.")
+    parser.add_argument(
+        "--zbl-bonded-exclusion",
+        action="store_true",
+        help="Use molecular_zbl.MolecularZBL instead of stock ZBL - excludes same-molecule "
+        "atom pairs from the repulsive correction (see molecular_zbl.py and "
+        "paper/literature_review_candidates.md section 0). Only takes effect with "
+        "--use-zbl-prior. Writes to a further-separate checkpoints/waterbox_study_zbl_bonded/ "
+        "root, so it never overwrites the stock-ZBL negative-result checkpoints either.",
+    )
     args = parser.parse_args()
 
     if args.smoke_test:
@@ -364,7 +382,7 @@ def main():
         seeds = SEEDS
         num_epochs = FIXED_HPARAMS["num_epochs"]
 
-    checkpoint_root, log_root, results_root = _roots(args.use_zbl_prior)
+    checkpoint_root, log_root, results_root = _roots(args.use_zbl_prior, args.zbl_bonded_exclusion)
     raw_results_csv = results_root / "raw_results.csv"
     summary_csv = results_root / "summary_table.csv"
     summary_md = results_root / "summary_table.md"
@@ -376,6 +394,8 @@ def main():
             extra_hparams["zbl_cutoff_distance"] = args.zbl_cutoff_distance
         if args.zbl_max_num_neighbors is not None:
             extra_hparams["zbl_max_num_neighbors"] = args.zbl_max_num_neighbors
+        if args.zbl_bonded_exclusion:
+            extra_hparams["zbl_bonded_exclusion"] = True
 
     rows, failed_cells = run_matrix(
         conditions, seeds, num_epochs, checkpoint_root, log_root, raw_results_csv,
