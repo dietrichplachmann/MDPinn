@@ -290,6 +290,18 @@ def main():
         help="1 condition (water_absolute), 1 replicate, 20 steps - confirm the plumbing "
         "end-to-end before running the full comparison.",
     )
+    parser.add_argument(
+        "--extended-anneal",
+        action="store_true",
+        help="Compare the extended-schedule checkpoints (checkpoints/waterbox_study..._ext70/, "
+        "from run_waterbox_study.py --extended-anneal) instead of the original 50-epoch "
+        "checkpoints. Fixes a checkpoint-selection confound in the 50-epoch schedule where "
+        "some seeds' 'best' checkpoint landed pre-anneal or with too little post-anneal "
+        "recovery time, making momentum-vs-absolute comparisons on those checkpoints unfair "
+        "(see train_waterbox.py's eligible_epoch_start / run_waterbox_study.py's "
+        "EXTENDED_NUM_EPOCHS comments). Writes to a further-separate "
+        "results/waterbox_rollout_study..._ext70/ root.",
+    )
     parser.add_argument("--steps", type=int, default=2000)
     parser.add_argument("--dt", type=float, default=0.5)
     parser.add_argument("--temperature-k", type=float, default=300.0)
@@ -301,11 +313,15 @@ def main():
         checkpoint_root = "checkpoints/waterbox_study_zbl_bonded"
     else:
         checkpoint_root = "checkpoints/waterbox_study_zbl"
+    if args.extended_anneal:
+        checkpoint_root += "_ext70"
     checkpoints = checkpoints_for_seed(args.train_seed, checkpoint_root=checkpoint_root)
 
     results_dir_name = "results/waterbox_rollout_study"
     if args.use_zbl_prior:
         results_dir_name += "_zbl_bonded" if args.zbl_bonded_exclusion else "_zbl"
+    if args.extended_anneal:
+        results_dir_name += "_ext70"
     if args.train_seed != 0:
         results_dir_name += f"_seed{args.train_seed}"
     results_root = RESULTS_ROOT if results_dir_name == "results/waterbox_rollout_study" else Path(results_dir_name)

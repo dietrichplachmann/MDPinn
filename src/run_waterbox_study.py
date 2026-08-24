@@ -132,12 +132,37 @@ FIXED_HPARAMS = dict(
     post_anneal_force_weight=0.25,
 )
 
+# --extended-anneal override (2026-08-24): the 50-epoch run above gives the
+# post-anneal (energy-focused) phase only 20 epochs to recover from the
+# disruptive reweighting at anneal_epoch=30 before ModelCheckpoint's plain
+# running min() locks in whatever's best-so-far. Checked across the 6-seed
+# waterbox_study_zbl_bonded run: the selected epoch ranged from 17 to 47,
+# with several seeds (e.g. water_absolute+momentum/seed1 at epoch 29 - ONE
+# epoch before the anneal switch even fired) never getting any post-anneal
+# fine-tuning at all before their pre-anneal score won by default. Comparing
+# absolute vs momentum is not meaningful when one condition's "best"
+# checkpoint got 16 epochs of energy-focused training and the other got zero.
+# EXTENDED_NUM_EPOCHS=70 keeps anneal_epoch=30 unchanged (still the
+# literature-matched 60%-of-run timing for the ORIGINAL 50-epoch schedule,
+# deliberately not re-derived as 60% of 70 here - only one variable, total
+# epoch budget, should change at a time) but gives 40 epochs of post-anneal
+# training instead of 20. EXTENDED_ELIGIBLE_EPOCH_START=50 (anneal_epoch + 20,
+# matching the same 20-epoch recovery window that already existed, just
+# spent as a mandatory burn-in instead of an implicit deadline) makes every
+# epoch before it ineligible for checkpoint selection (WaterLNNP's
+# eligible_epoch_start, train_waterbox.py) - the remaining 20 epochs
+# (50-69) are then the only ones ModelCheckpoint can ever pick from,
+# guaranteeing the selected checkpoint always reflects genuine post-anneal
+# convergence rather than checkpoint-selection luck.
+EXTENDED_NUM_EPOCHS = 70
+EXTENDED_ELIGIBLE_EPOCH_START = 50
+
 CHECKPOINT_ROOT = Path("checkpoints/waterbox_study")
 LOG_ROOT = Path("logs/waterbox_study")
 RESULTS_ROOT = Path("results/waterbox_study")
 
 
-def _roots(use_zbl_prior, zbl_bonded_exclusion=False):
+def _roots(use_zbl_prior, zbl_bonded_exclusion=False, extended_anneal=False):
     """--use-zbl-prior redirects every path to a separate "_zbl"-suffixed
     root (checkpoints/waterbox_study_zbl/, etc.) rather than reusing the
     existing waterbox_study/ paths - the same pattern run_rollout_study.py
@@ -152,10 +177,21 @@ def _roots(use_zbl_prior, zbl_bonded_exclusion=False):
     --zbl-bonded-exclusion adds a further "_bonded" suffix
     (checkpoints/waterbox_study_zbl_bonded/, etc.) - a separate root again,
     so the already-completed stock-ZBL negative-result comparison
-    (paper/main.tex sec:q4-negative-result) is never overwritten either."""
+    (paper/main.tex sec:q4-negative-result) is never overwritten either.
+
+    --extended-anneal adds a further "_ext70" suffix, for the same reason:
+    the already-completed waterbox_study_zbl_bonded comparison (6 seeds,
+    50-epoch schedule) has a known checkpoint-selection confound (see
+    EXTENDED_NUM_EPOCHS's comment above) and stays on disk untouched as a
+    reference, rather than being silently overwritten by the fixed-schedule
+    rerun."""
     if not use_zbl_prior:
+        base_suffix = ""
+    else:
+        base_suffix = "_zbl_bonded" if zbl_bonded_exclusion else "_zbl"
+    suffix = base_suffix + ("_ext70" if extended_anneal else "")
+    if not suffix:
         return CHECKPOINT_ROOT, LOG_ROOT, RESULTS_ROOT
-    suffix = "_zbl_bonded" if zbl_bonded_exclusion else "_zbl"
     return (
         Path(f"{CHECKPOINT_ROOT}{suffix}"),
         Path(f"{LOG_ROOT}{suffix}"),
@@ -371,6 +407,23 @@ def main():
         "--use-zbl-prior. Writes to a further-separate checkpoints/waterbox_study_zbl_bonded/ "
         "root, so it never overwrites the stock-ZBL negative-result checkpoints either.",
     )
+    parser.add_argument(
+        "--extended-anneal",
+        action="store_true",
+        help="Retrain with EXTENDED_NUM_EPOCHS/EXTENDED_ELIGIBLE_EPOCH_START instead of "
+        "FIXED_HPARAMS's num_epochs (fixes the checkpoint-selection confound described in "
+        "EXTENDED_NUM_EPOCHS's comment above - some seeds' 'best' checkpoint was landing "
+        "pre-anneal or with too little post-anneal recovery time to be a fair comparison). "
+        "Writes to a further-separate checkpoints/waterbox_study..._ext70/ root, so the "
+        "existing 50-epoch comparison is never overwritten.",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default=None,
+        help="Comma-separated seed list to run, overriding SEEDS (e.g. '0,1' for a quick "
+        "pilot before committing the full 6-seed sweep). Ignored with --smoke-test.",
+    )
     args = parser.parse_args()
 
     if args.smoke_test:
@@ -379,10 +432,12 @@ def main():
         num_epochs = 2
     else:
         conditions = CONDITIONS
-        seeds = SEEDS
-        num_epochs = FIXED_HPARAMS["num_epochs"]
+        seeds = [int(s) for s in args.seeds.split(",")] if args.seeds else SEEDS
+        num_epochs = EXTENDED_NUM_EPOCHS if args.extended_anneal else FIXED_HPARAMS["num_epochs"]
 
-    checkpoint_root, log_root, results_root = _roots(args.use_zbl_prior, args.zbl_bonded_exclusion)
+    checkpoint_root, log_root, results_root = _roots(
+        args.use_zbl_prior, args.zbl_bonded_exclusion, args.extended_anneal,
+    )
     raw_results_csv = results_root / "raw_results.csv"
     summary_csv = results_root / "summary_table.csv"
     summary_md = results_root / "summary_table.md"
@@ -396,6 +451,8 @@ def main():
             extra_hparams["zbl_max_num_neighbors"] = args.zbl_max_num_neighbors
         if args.zbl_bonded_exclusion:
             extra_hparams["zbl_bonded_exclusion"] = True
+    if args.extended_anneal:
+        extra_hparams["eligible_epoch_start"] = EXTENDED_ELIGIBLE_EPOCH_START
 
     rows, failed_cells = run_matrix(
         conditions, seeds, num_epochs, checkpoint_root, log_root, raw_results_csv,

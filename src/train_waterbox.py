@@ -78,6 +78,7 @@ class WaterLNNP(LNNP):
         anneal_epoch=None,
         post_anneal_energy_weight=None,
         post_anneal_force_weight=None,
+        eligible_epoch_start=None,
         **kwargs,
     ):
         super().__init__(hparams, **kwargs)
@@ -95,6 +96,25 @@ class WaterLNNP(LNNP):
         self._pre_anneal_y_weight = float(self.hparams.y_weight)
         self._pre_anneal_neg_dy_weight = float(self.hparams.neg_dy_weight)
         self._annealed = False
+
+        # Checkpoint-selection floor, independent of the anneal schedule
+        # above. val_checkpoint_score alone (pre-anneal-weighted) only fixes
+        # the SCALE problem (post-anneal epochs no longer judged by a
+        # structurally harsher yardstick) - it does nothing to stop
+        # ModelCheckpoint's plain running min() from picking a pre-anneal (or
+        # barely-post-anneal) epoch outright, if the post-anneal phase's
+        # early, still-recovering-from-the-reweighting-shock epochs simply
+        # haven't beaten the pre-anneal minimum yet within the run's epoch
+        # budget - confirmed happening across multiple waterbox_study_zbl_bonded
+        # seeds (e.g. water_absolute+momentum/seed1 selected epoch 29, one
+        # epoch before anneal_epoch=30 ever fired, getting zero epochs of the
+        # energy-focused fine-tuning the anneal exists to provide). Since
+        # ModelCheckpoint(mode="min") has no notion of "epoch" to exclude an
+        # early range by itself, eligible_epoch_start=None (default) preserves
+        # existing behavior exactly; set to an epoch index to make every
+        # earlier epoch's logged val_checkpoint_score +inf, so the mode="min"
+        # tracker can mathematically never select one of them.
+        self.eligible_epoch_start = eligible_epoch_start
 
     def on_train_epoch_start(self):
         super().on_train_epoch_start()
@@ -152,7 +172,16 @@ class WaterLNNP(LNNP):
         neg_dy_mse = self.trainer.callback_metrics.get("val_neg_dy_mse_loss")
         if y_mse is not None and neg_dy_mse is not None:
             checkpoint_score = self._pre_anneal_y_weight * y_mse + self._pre_anneal_neg_dy_weight * neg_dy_mse
-            self.log("val_checkpoint_score", checkpoint_score, on_step=False, on_epoch=True)
+            # Logged unconditionally (even when masked below) so the real
+            # score for every epoch - including ones excluded from selection -
+            # stays visible in best_model_history.csv for debugging/plotting,
+            # instead of being overwritten by the +inf sentinel.
+            self.log("val_checkpoint_score_raw", checkpoint_score, on_step=False, on_epoch=True)
+            ineligible = (
+                self.eligible_epoch_start is not None and self.current_epoch < self.eligible_epoch_start
+            )
+            monitored_score = torch.tensor(float("inf")) if ineligible else checkpoint_score
+            self.log("val_checkpoint_score", monitored_score, on_step=False, on_epoch=True)
 
     def _global_molecule_ids_for_batch(self, batch):
         n_atoms = batch.z.shape[0]
@@ -283,6 +312,7 @@ def train_waterbox_model(
     anneal_epoch=None,
     post_anneal_energy_weight=None,
     post_anneal_force_weight=None,
+    eligible_epoch_start=None,
     use_zbl_prior=False,
     zbl_cutoff_distance=ZBL_CUTOFF_DISTANCE,
     zbl_max_num_neighbors=ZBL_MAX_NUM_NEIGHBORS,
@@ -297,7 +327,16 @@ def train_waterbox_model(
     energy_weight/force_weight fixed for the whole run, unchanged from before.
     When set, training starts at (energy_weight, force_weight) as usual, then
     switches to (post_anneal_energy_weight, post_anneal_force_weight) at
-    anneal_epoch and stays there. This mirrors the force-then-energy annealing
+    anneal_epoch and stays there.
+
+    eligible_epoch_start: optional epoch index below which val_checkpoint_score
+    is logged as +inf, so ModelCheckpoint/EarlyStopping's plain running-min
+    tracker can never select an epoch before it (see WaterLNNP.__init__'s
+    docstring comment for why the anneal schedule alone doesn't already
+    guarantee this). None (default) preserves existing behavior exactly -
+    every epoch remains eligible.
+
+    This mirrors the force-then-energy annealing
     schedules reported for MACE and NequIP (force-dominant early to fix the
     local force/gradient shape, energy-dominant later to fix up absolute
     energy calibration) - see run_waterbox_study.py for the specific schedule
@@ -444,6 +483,7 @@ def train_waterbox_model(
         anneal_epoch=anneal_epoch,
         post_anneal_energy_weight=post_anneal_energy_weight,
         post_anneal_force_weight=post_anneal_force_weight,
+        eligible_epoch_start=eligible_epoch_start,
     )
 
     # Both conditions are absolute-mode only (no delta-learning), so
@@ -487,7 +527,18 @@ def train_waterbox_model(
     # Same reasoning as checkpoint_callback above - monitor the anneal-
     # invariant score, not the raw weighted total, so "no improvement in N
     # epochs" isn't tripped by the metric's own scale jumping at anneal_epoch.
-    early_stop = EarlyStopping(monitor="val_checkpoint_score", patience=early_stop_patience, mode="min", strict=False)
+    #
+    # Deliberately watches val_checkpoint_score_raw, NOT the (possibly
+    # eligible_epoch_start-floored) val_checkpoint_score that checkpoint_callback
+    # uses: if eligible_epoch_start masks every pre-floor epoch to +inf, those
+    # epochs would all read as "no improvement" to an EarlyStopping watching
+    # that same masked metric, exhausting early_stop_patience and stopping
+    # training before the eligible window ever opens - regardless of how well
+    # the model is actually doing. val_checkpoint_score_raw is never masked,
+    # so early stopping still tracks genuine convergence throughout the run;
+    # it just doesn't drive WHICH epoch gets saved as best (that is
+    # checkpoint_callback's job alone).
+    early_stop = EarlyStopping(monitor="val_checkpoint_score_raw", patience=early_stop_patience, mode="min", strict=False)
     history_callback = MetricHistoryCallback(save_dir, checkpoint_name)
     logger = TensorBoardLogger(save_dir=log_dir, name="waterbox")
     trainer_callbacks = list(trainer_callbacks or [])
@@ -540,6 +591,10 @@ def train_waterbox_model(
             "zbl_cutoff_distance": zbl_cutoff_distance if use_zbl_prior else None,
             "zbl_max_num_neighbors": zbl_max_num_neighbors if use_zbl_prior else None,
             "zbl_bonded_exclusion": zbl_bonded_exclusion if use_zbl_prior else None,
+            "anneal_epoch": anneal_epoch,
+            "post_anneal_energy_weight": post_anneal_energy_weight,
+            "post_anneal_force_weight": post_anneal_force_weight,
+            "eligible_epoch_start": eligible_epoch_start,
         },
         "num_molecules_per_system": num_molecules_per_system,
         "validation_metrics": val_metrics,
