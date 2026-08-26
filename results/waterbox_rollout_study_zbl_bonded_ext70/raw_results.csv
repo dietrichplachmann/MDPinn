@@ -1,3 +1,0 @@
-condition,velocity_seed,test_config_index,drift_ev_per_atom_mev,drift_fraction_pct,plateau_temperature_mean,plateau_temperature_std
-water_absolute,0,0,-0.0721758136326874,-4.617504999571561e-05,1759.1109256556063,66.16068755044918
-water_absolute,1,0,-0.04512654317068154,-2.8869968256877177e-05,1667.8687590530878,79.08044299581032
