@@ -1,0 +1,3 @@
+condition,n_replicates,drift_ev_per_atom_mev_mean,drift_ev_per_atom_mev_std,drift_fraction_pct_mean,drift_fraction_pct_std,plateau_temperature_mean_mean,plateau_temperature_mean_std,plateau_temperature_std_mean,plateau_temperature_std_std
+water_absolute,5,-0.02441065314921313,0.0394962411378309,-1.5616244940734166e-05,2.5263526171082154e-05,643.71710876243,148.7258016257465,29.06272699696408,5.617616574569743
+water_absolute+momentum,5,-0.025906886567857633,0.02481628312750883,-1.65676361566659e-05,1.586830072262271e-05,611.4909841547742,134.1533842655804,28.627761035207783,7.37308619740028
