@@ -66,6 +66,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from ase.md.velocitydistribution import MaxwellBoltzmannDistribution, Stationary
 
 from boltzmann_estimator import boltzmann_estimator_pseudo_loss, observable_loss_value
 from diagnose_short_range_collapse import (
@@ -225,7 +226,7 @@ def fine_tune_stable(
     print(f"Building {n_replicas} replicas from distinct training-split starting configurations...")
     replica_indices = rng.choice(len(train_data), size=n_replicas, replace=False)
     replica_atoms, replica_states, same_molecule_masks = [], [], []
-    for idx in replica_indices:
+    for replica_i, idx in enumerate(replica_indices):
         sample = train_data[int(idx)]
         atoms = atoms_from_waterbox_sample(sample)
         # model=model (not checkpoint_path=ckpt): every replica MUST share
@@ -236,7 +237,19 @@ def fine_tune_stable(
         # progress, breaking the on-policy premise this whole estimator
         # depends on).
         atoms.calc = TensorNetCalculator(model=model, device=device)
-        atoms.set_velocities(np.zeros((len(atoms), 3)))
+        # Maxwell-Boltzmann at temperature_k, not a cold (zero-velocity)
+        # start - matches the already-verified convention used everywhere
+        # else in this project (waterbox_langevin._smoke_test_thermostat,
+        # rollout_waterbox_ase.run_rollout). A cold start isn't obviously
+        # wrong, but it's an unjustified departure from the one convention
+        # already empirically confirmed to equilibrate sanely (paper/main.tex
+        # sec:q4-stable-step2's thermostat smoke-test result) - no reason to
+        # introduce a second, unverified regime for the real fine-tuning
+        # loop specifically. Explicit RandomState per replica (this
+        # project's own established discipline - CLAUDE.md's Lessons on
+        # MaxwellBoltzmannDistribution's global-RNG pitfall).
+        MaxwellBoltzmannDistribution(atoms, temperature_K=temperature_k, rng=np.random.RandomState(seed + replica_i))
+        Stationary(atoms)
 
         z = atoms.get_atomic_numbers()
         positions = atoms.get_positions()
@@ -369,16 +382,22 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--smoke-test", action="store_true",
-        help="2 replicas, 3 outer iterations, short windows - confirm the whole loop runs end to "
-        "end (checkpoints save, loss doesn't crash/NaN) before a real run (build order item 3, "
-        "paper/main.tex sec:q4-stable-plan). NOT a claim that 3 iterations does anything useful.",
+        help="3 replicas, 3 outer iterations, short-but-not-tiny windows - confirm the whole loop "
+        "runs end to end AND actually exercises a real gradient step (checkpoints save, loss "
+        "doesn't crash/NaN) before a real run (build order item 3, paper/main.tex "
+        "sec:q4-stable-plan). NOT a claim that 3 iterations does anything useful. Sized so a "
+        "SINGLE well-behaved replica alone clears the N>=2 sample floor (4 checks/phase, "
+        "stride=2 -> 2 samples) even if every other replica happens to be chronically unstable "
+        "(a real, expected outcome for some starting configs, not a bug - see paper/main.tex "
+        "sec:q4-stable-step3's smoke-test-run discussion) - the original 2-replica/2-check "
+        "sizing had no headroom for that and starved on the very first real run.",
     )
     args = parser.parse_args()
 
     if args.smoke_test:
         fine_tune_stable(
             ckpt=args.ckpt, out_dir=args.out, data_root=args.data_root,
-            n_replicas=2, n_outer_iterations=3, check_interval=10, learn_window_steps=20,
+            n_replicas=3, n_outer_iterations=3, check_interval=10, learn_window_steps=40,
             subsample_stride=2, temperature_k=args.temperature_k, friction_fs_inv=args.friction_fs_inv,
             dt_fs=args.dt, lambda_qm=args.lambda_qm, lr=args.lr, qm_batch_size=2,
             n_reference_configs=20, save_every=1, seed=args.seed,
