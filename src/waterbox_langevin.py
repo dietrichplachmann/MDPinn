@@ -251,6 +251,80 @@ def run_stable_sampling_phase(
     return all_collected
 
 
+def _smoke_test_rewind(ckpt, data_root, temperature_k, friction_fs_inv, dt_fs, check_interval, learn_window_steps,
+                        subsample_stride, seed):
+    """Confirms run_stable_sampling_phase's rewind path actually engages and
+    correctly reloads state in a real run - the pure ReplicaState logic is
+    already unit-tested (verify_waterbox_langevin.py), but that never
+    exercises the real ase.md.langevin.Langevin object or the real
+    set_positions/set_velocities reload, which is exactly the part
+    _smoke_test_thermostat above deliberately does NOT cover. Forces a
+    rewind on literally the first stability check by passing absurdly large
+    floors (no real inter-molecular distance in this ~12 A box is ever
+    >=1000 A, so frame_violates_floors trips unconditionally) rather than
+    waiting for organic instability, matching the plan's own build-order
+    item ("artificially lower the stability threshold to force an early
+    trip", paper/main.tex sec:q4-stable-plan). Since every single check
+    trips, state.last_good never advances past the initial snapshot - so
+    after the full phase, the replica's positions should have landed back
+    on EXACTLY the starting positions (the last thing the loop does on a
+    trip is reload last_good), a concrete, checkable correctness signal
+    beyond just watching n_rewinds count up."""
+    from diagnose_short_range_collapse import molecule_group_ids, same_molecule_mask
+    from waterbox_ase import TensorNetCalculator, atoms_from_waterbox_sample
+    from waterbox_data import load_waterbox_dataset, random_split
+
+    full_dataset = load_waterbox_dataset(data_root=data_root)
+    _, _, test_data = random_split(full_dataset, seed=seed)
+    sample = test_data[0]
+    atoms = atoms_from_waterbox_sample(sample)
+    atoms.calc = TensorNetCalculator(ckpt)
+    atoms.set_velocities(np.zeros((len(atoms), 3)))
+
+    initial_positions = atoms.get_positions().copy()
+    z = atoms.get_atomic_numbers()
+    box_lengths = np.array(atoms.get_cell()).diagonal()
+    group_ids = molecule_group_ids(z, initial_positions, box_lengths)
+    same_molecule = same_molecule_mask(group_ids)
+
+    impossible_floors = {"O-O": 1000.0, "O-H": 1000.0, "H-H": 1000.0}
+    initial_snapshot = Snapshot(positions=initial_positions.copy(), velocities=atoms.get_velocities().copy(), step=0)
+    state = ReplicaState(initial_snapshot)
+
+    print(
+        f"Forcing every stability check to trip (floors={impossible_floors}) - watch n_rewinds "
+        f"climb and confirm the reload actually lands back on the starting positions..."
+    )
+    collected = run_stable_sampling_phase(
+        replica_atoms=[atoms],
+        replica_states=[state],
+        same_molecule_masks=[same_molecule],
+        floors=impossible_floors,
+        dt_fs=dt_fs,
+        temperature_k=temperature_k,
+        friction_fs_inv=friction_fs_inv,
+        check_interval=check_interval,
+        learn_window_steps=learn_window_steps,
+        subsample_stride=subsample_stride,
+        rng_seed=seed,
+    )[0]
+
+    expected_n_rewinds = learn_window_steps // check_interval
+    final_positions = atoms.get_positions()
+    max_position_drift = float(np.abs(final_positions - initial_positions).max())
+
+    print(f"n_rewinds = {state.n_rewinds} (expected ~{expected_n_rewinds}, one per check_interval window)")
+    print(f"collected samples this phase = {len(collected)} (expected 0 - last_good never advanced past the start)")
+    print(f"max |final_positions - initial_positions| = {max_position_drift:.6f} A (expected ~0.0)")
+
+    ok = (
+        state.n_rewinds == expected_n_rewinds
+        and len(collected) == 0
+        and max_position_drift < 1e-6
+    )
+    print("PASS" if ok else "FAIL - rewind mechanism did not behave as expected, see numbers above")
+
+
 def _smoke_test_thermostat(ckpt, data_root, temperature_k, friction_fs_inv, dt_fs, steps, energy_log_stride, seed):
     """Thermostat-only sanity check (module docstring's Usage) - deliberately
     NOT a full StABlE phase (no stability check, no rewind, single replica):
@@ -322,6 +396,16 @@ if __name__ == "__main__":
         "--smoke-test", action="store_true",
         help="Thermostat-only sanity check (see module docstring) - NOT a full StABlE phase.",
     )
+    parser.add_argument(
+        "--smoke-test-rewind", action="store_true",
+        help="Forces every stability check to trip (impossible floors) and confirms "
+        "run_stable_sampling_phase's rewind path actually engages and correctly reloads "
+        "state - run AFTER --smoke-test passes, since this assumes the thermostat itself "
+        "already works.",
+    )
+    parser.add_argument("--check-interval", type=int, default=20)
+    parser.add_argument("--learn-window-steps", type=int, default=100)
+    parser.add_argument("--subsample-stride", type=int, default=2)
     args = parser.parse_args()
 
     if args.smoke_test:
@@ -330,9 +414,17 @@ if __name__ == "__main__":
             friction_fs_inv=args.friction_fs_inv, dt_fs=args.dt, steps=args.steps,
             energy_log_stride=args.energy_log_stride, seed=args.seed,
         )
+    elif args.smoke_test_rewind:
+        _smoke_test_rewind(
+            ckpt=args.ckpt, data_root=args.data_root, temperature_k=args.temperature_k,
+            friction_fs_inv=args.friction_fs_inv, dt_fs=args.dt,
+            check_interval=args.check_interval, learn_window_steps=args.learn_window_steps,
+            subsample_stride=args.subsample_stride, seed=args.seed,
+        )
     else:
         print(
             "No standalone full-phase entrypoint yet - run_stable_sampling_phase is called "
             "from train_waterbox_stable.py (not yet built, step 3 of the plan). Use "
-            "--smoke-test to sanity-check the Langevin thermostat alone first."
+            "--smoke-test to sanity-check the Langevin thermostat alone first, then "
+            "--smoke-test-rewind to confirm the rewind mechanism itself."
         )
