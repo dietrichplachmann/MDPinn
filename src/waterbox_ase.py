@@ -73,10 +73,27 @@ class TensorNetCalculator(Calculator):
 
     implemented_properties = ["energy", "forces"]
 
-    def __init__(self, checkpoint_path, device=None, **kwargs):
+    def __init__(self, checkpoint_path=None, model=None, device=None, **kwargs):
+        """Pass exactly one of checkpoint_path (loads a fresh model from
+        disk, the original/only behavior before this parameter was added)
+        or model (uses an already-loaded model object directly - added for
+        train_waterbox_stable.py's StABlE fine-tuning loop, sec:q4-stable-plan,
+        where every replica's Calculator must share the SAME live model
+        object the optimizer is updating, not its own independently-loaded
+        copy - PyTorch's optimizer.step() mutates parameters in place, so a
+        shared reference automatically reflects every later update with no
+        extra plumbing, but only if it really is the same object, not a
+        separately-loaded twin)."""
         super().__init__(**kwargs)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = load_waterbox_checkpoint(checkpoint_path, device=self.device)
+        if model is not None:
+            if checkpoint_path is not None:
+                raise ValueError("Pass exactly one of checkpoint_path or model, not both.")
+            self.model = model
+        else:
+            if checkpoint_path is None:
+                raise ValueError("Must pass checkpoint_path or model.")
+            self.model = load_waterbox_checkpoint(checkpoint_path, device=self.device)
 
     def calculate(self, atoms=None, properties=None, system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)

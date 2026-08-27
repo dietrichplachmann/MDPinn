@@ -119,9 +119,19 @@ def molecule_group_ids(z: np.ndarray, positions: np.ndarray, box_lengths: np.nda
     Returns an (N,) int array of group ids."""
     from structural_metrics import infer_molecule_groups
 
-    z_t = torch.as_tensor(z, dtype=torch.long)
-    pos_t = torch.as_tensor(positions, dtype=torch.float32)
-    box_t = torch.diag(torch.as_tensor(box_lengths, dtype=torch.float32))
+    # .copy() (not ascontiguousarray - that only forces a copy incidentally
+    # when the input happens to be non-contiguous, not guaranteed in
+    # general) since a caller passing a .diagonal() view specifically (e.g.
+    # waterbox_langevin.py's live stability check) hands over a read-only
+    # array - torch.as_tensor would otherwise warn on every call
+    # ("undefined behavior" if ever written to, which nothing here does,
+    # but silencing this at the source is one line and this function is
+    # about to be called constantly by the StABlE fine-tuning loop,
+    # sec:q4-stable-plan). Confirmed empirically: np.eye(3).diagonal() is
+    # both non-writable AND non-contiguous.
+    z_t = torch.as_tensor(np.asarray(z).copy(), dtype=torch.long)
+    pos_t = torch.as_tensor(np.asarray(positions).copy(), dtype=torch.float32)
+    box_t = torch.diag(torch.as_tensor(np.asarray(box_lengths).copy(), dtype=torch.float32))
     return infer_molecule_groups(z_t, pos_t, box=box_t).cpu().numpy()
 
 
