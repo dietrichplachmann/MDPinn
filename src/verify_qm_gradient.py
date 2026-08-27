@@ -42,6 +42,21 @@ per parameter, prohibitively slow for a model this size) - picking the
 largest-gradient entry per tensor also avoids a false "pass" from checking
 a parameter whose gradient happens to be ~0 either way.
 
+A first real run (2026) found 4/5 parameters agreeing within 5%, one at
+~8.4% - a borderline single mismatch, not the wildly-wrong-or-wrong-signed
+pattern a genuinely broken double-backward would be expected to produce.
+Before concluding the double-backward is actually broken, this script now
+also (1) checks whether the UNPERTURBED loss itself is bit-identical
+across repeated evaluations with unchanged parameters - GNN message-passing
+architectures commonly rely on CUDA scatter/reduce operations that are
+non-deterministic by default (this project's own code already uses
+`scatter` elsewhere, e.g. molecular_zbl.py), which would inject noise into
+a finite-difference check independent of any real gradient error - and (2)
+automatically re-runs the finite-difference computation at several
+additional eps values for any parameter that fails, since a genuine
+gradient bug should stay robustly wrong across a wide range of step sizes,
+while noise-limited estimation typically does not.
+
 Usage (training box only, needs torchmdnet - NOT yet run):
     python src/verify_qm_gradient.py --ckpt checkpoints/waterbox_study_zbl_bonded_ext70/water_absolute/seed1/best_model.ckpt
 """
@@ -56,7 +71,26 @@ from train_waterbox_stable import _qm_regularizer_loss
 from waterbox_data import load_waterbox_dataset, random_split
 
 
-def main(ckpt, data_root="./data", seed=42, batch_size=2, eps=1e-4, n_params_to_check=5, rel_err_threshold=0.05):
+def _finite_diff_grad(loss_fn, p, idx, eps):
+    """One central-difference estimate of d(loss_fn())/d(p.view(-1)[idx]),
+    restoring the original value before returning regardless of outcome."""
+    with torch.no_grad():
+        flat = p.view(-1)
+        original = float(flat[idx].item())
+        flat[idx] = original + eps
+    loss_plus = float(loss_fn().item())
+
+    with torch.no_grad():
+        flat[idx] = original - eps
+    loss_minus = float(loss_fn().item())
+
+    with torch.no_grad():
+        flat[idx] = original
+    return (loss_plus - loss_minus) / (2 * eps)
+
+
+def main(ckpt, data_root="./data", seed=42, batch_size=2, eps=1e-4, n_params_to_check=5, rel_err_threshold=0.05,
+         eps_sweep=(1e-2, 1e-3, 1e-5)):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = load_waterbox_checkpoint(ckpt, device=device)
     model.train()
@@ -73,6 +107,20 @@ def main(ckpt, data_root="./data", seed=42, batch_size=2, eps=1e-4, n_params_to_
         rng_fixed = np.random.default_rng(123)
         return _qm_regularizer_loss(model, train_data, batch_size, device, rng_fixed)
 
+    print("Checking whether the unperturbed loss is even deterministic across repeated calls "
+          "(same params, same batch) - establishes a noise floor before trusting any single "
+          "finite-difference comparison...")
+    # No torch.no_grad() here even though nothing below needs gradients:
+    # _qm_regularizer_loss internally forces torch.enable_grad() regardless
+    # of the calling context (the model's derivative=True forward pass
+    # needs it), so an outer no_grad() would be silently ineffective, not
+    # actually save anything - only .item() is read below, .backward() is
+    # never called on these.
+    repeat_losses = [float(loss_at_current_params().item()) for _ in range(5)]
+    noise_spread = max(repeat_losses) - min(repeat_losses)
+    print(f"  5 repeated evaluations: {repeat_losses}")
+    print(f"  spread = {noise_spread:.6e} (0.0 would mean fully deterministic)")
+
     model.zero_grad()
     loss = loss_at_current_params()
     loss.backward()
@@ -87,8 +135,9 @@ def main(ckpt, data_root="./data", seed=42, batch_size=2, eps=1e-4, n_params_to_
     candidates.sort(key=lambda c: -abs(c[3]))
     candidates = candidates[:n_params_to_check]
 
-    print(f"Checking {len(candidates)} parameters (largest-magnitude analytic gradient per tensor, eps={eps})...")
+    print(f"\nChecking {len(candidates)} parameters (largest-magnitude analytic gradient per tensor, eps={eps})...")
     all_ok = True
+    mismatches = []
     for name, p, idx, analytic_grad in candidates:
         # p.view(-1), not p.flatten() or p.detach().flatten(): .view()
         # requires true memory-sharing with p and raises loudly if that's
@@ -96,27 +145,36 @@ def main(ckpt, data_root="./data", seed=42, batch_size=2, eps=1e-4, n_params_to_
         # copy - the whole point of this script is establishing ground
         # truth, so a perturbation that silently doesn't touch the real
         # parameter would corrupt the check without any error at all.
-        with torch.no_grad():
-            flat = p.view(-1)
-            original = float(flat[idx].item())
-            flat[idx] = original + eps
-        loss_plus = float(loss_at_current_params().item())
-
-        with torch.no_grad():
-            flat[idx] = original - eps
-        loss_minus = float(loss_at_current_params().item())
-
-        with torch.no_grad():
-            flat[idx] = original  # restore exactly, regardless of outcome below
-
-        numerical_grad = (loss_plus - loss_minus) / (2 * eps)
+        numerical_grad = _finite_diff_grad(loss_at_current_params, p, idx, eps)
         rel_err = abs(numerical_grad - analytic_grad) / (abs(analytic_grad) + abs(numerical_grad) + 1e-12)
         ok = rel_err < rel_err_threshold
         all_ok = all_ok and ok
+        # Noise-floor context: if the unperturbed loss itself varies by
+        # noise_spread between calls, the finite-difference formula
+        # (dividing a loss difference by 2*eps) amplifies that same spread
+        # into a gradient-estimate uncertainty of roughly this magnitude -
+        # a mismatch smaller than or comparable to this is NOT evidence of
+        # a real gradient bug, it's the check's own noise floor.
+        implied_noise_floor = noise_spread / (2 * eps)
         print(
             f"  {name}[{idx}]: analytic={analytic_grad:.6e}  numerical={numerical_grad:.6e}  "
-            f"rel_err={rel_err:.4%}  {'OK' if ok else 'MISMATCH'}"
+            f"rel_err={rel_err:.4%}  {'OK' if ok else 'MISMATCH'}  "
+            f"(noise-floor-implied grad uncertainty ~{implied_noise_floor:.3e})"
         )
+        if not ok:
+            mismatches.append((name, p, idx, analytic_grad))
+
+    for name, p, idx, analytic_grad in mismatches:
+        print(f"\nMismatch on {name}[{idx}] - sweeping eps to check whether the disagreement is "
+              f"robust (real bug) or shrinks/is noise-floor-limited (finite-difference artifact)...")
+        for sweep_eps in sorted(set(eps_sweep) | {eps}):
+            numerical_grad = _finite_diff_grad(loss_at_current_params, p, idx, sweep_eps)
+            rel_err = abs(numerical_grad - analytic_grad) / (abs(analytic_grad) + abs(numerical_grad) + 1e-12)
+            implied_noise_floor = noise_spread / (2 * sweep_eps)
+            print(
+                f"    eps={sweep_eps:.0e}: numerical={numerical_grad:.6e}  rel_err={rel_err:.4%}  "
+                f"noise-floor-implied grad uncertainty ~{implied_noise_floor:.3e}"
+            )
 
     if all_ok:
         print(
@@ -127,11 +185,15 @@ def main(ckpt, data_root="./data", seed=42, batch_size=2, eps=1e-4, n_params_to_
         )
     else:
         print(
-            "\nFAIL - at least one parameter's analytic gradient does not match its finite-difference "
-            "estimate. Do NOT trust L_QM's force term until this is resolved - options: drop the force "
-            "term from L_QM (energy-only regularizer, a real accuracy tradeoff but avoids this op "
-            "entirely), or find a torchmdnet/PyTorch version combination that registers "
-            "get_neighbor_pairs_bkwd's double-backward correctly."
+            "\nFAIL at the default eps - see the eps-sweep output above for each mismatching parameter "
+            "before deciding what this means. If rel_err shrinks substantially at larger eps and/or is "
+            "comparable to (or smaller than) the noise-floor-implied uncertainty at that eps, this is "
+            "most likely finite-difference/CUDA-nondeterminism noise, not a genuine double-backward bug - "
+            "safe to proceed. If rel_err stays large and robust across every eps tried, well above the "
+            "noise floor at each one, treat this as a real gradient bug: do NOT trust L_QM's force term "
+            "until resolved - options: drop the force term from L_QM (energy-only regularizer, a real "
+            "accuracy tradeoff but avoids this op entirely), or find a torchmdnet/PyTorch version "
+            "combination that registers get_neighbor_pairs_bkwd's double-backward correctly."
         )
 
 
