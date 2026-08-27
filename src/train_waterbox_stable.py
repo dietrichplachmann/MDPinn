@@ -135,34 +135,83 @@ def _snapshot_to_atoms(snapshot: Snapshot, template_atoms):
     return atoms
 
 
-def _qm_regularizer_loss(model, train_data, batch_size, device, rng):
-    """L_QM: ordinary supervised energy/force MSE on a small, freshly-drawn
-    batch of real labeled TRAINING-split data (never on sampled/simulated
-    configurations - boltzmann_estimator.py's docstring on why this is a
-    pure regularizer against drifting away from DFT accuracy, not a second
-    source of training signal about the fine-tuning target itself). Uses
-    the checkpoint's OWN post-anneal (y_weight, neg_dy_weight) exactly as
-    trained with, rather than a fresh arbitrary choice - this is the
-    weighting the checkpoint was already being judged by right before
-    fine-tuning started."""
+def _qm_sample_indices_and_weights(model, train_data, batch_size, rng):
     y_weight = float(model.hparams.y_weight)
     neg_dy_weight = float(model.hparams.neg_dy_weight)
-
     indices = rng.choice(len(train_data), size=min(batch_size, len(train_data)), replace=False)
-    y_mse_total = torch.zeros((), device=device)
-    dy_mse_total = torch.zeros((), device=device)
-    for idx in indices:
-        sample = train_data[int(idx)].to(device)
-        z, pos, box = sample.z, sample.pos.float(), getattr(sample, "box", None)
-        pos_req = pos.detach().clone().requires_grad_(True)
-        batch = torch.zeros(z.shape[0], dtype=torch.long, device=device)
-        with torch.enable_grad():
-            energy_pred, force_pred = model(z, pos_req, batch=batch, box=box)
-        y_mse_total = y_mse_total + (energy_pred.squeeze() - sample.y.squeeze()) ** 2
-        dy_mse_total = dy_mse_total + torch.mean((force_pred - sample.neg_dy) ** 2)
+    return indices, y_weight, neg_dy_weight
 
+
+def _qm_per_sample_loss(model, train_data, idx, device, y_weight, neg_dy_weight):
+    """One training-split sample's weighted energy/force MSE, still
+    attached to theta (grad enabled) - the shared per-sample computation
+    both L_QM variants below build on, so the forward-pass/weighting logic
+    exists in exactly one place."""
+    sample = train_data[int(idx)].to(device)
+    z, pos, box = sample.z, sample.pos.float(), getattr(sample, "box", None)
+    pos_req = pos.detach().clone().requires_grad_(True)
+    batch = torch.zeros(z.shape[0], dtype=torch.long, device=device)
+    with torch.enable_grad():
+        energy_pred, force_pred = model(z, pos_req, batch=batch, box=box)
+    y_mse = (energy_pred.squeeze() - sample.y.squeeze()) ** 2
+    dy_mse = torch.mean((force_pred - sample.neg_dy) ** 2)
+    return y_weight * y_mse + neg_dy_weight * dy_mse
+
+
+def _qm_regularizer_loss(model, train_data, batch_size, device, rng):
+    """L_QM as a single differentiable tensor, summed across the batch
+    before the caller calls .backward() once - the original design. Kept
+    (not removed) specifically for verify_qm_gradient.py: that script
+    needs to call .backward() itself and re-evaluate the loss at perturbed
+    parameter values with no side effects, which requires a plain
+    differentiable return value, not a function that triggers its own
+    backward pass. Safe here because verify_qm_gradient.py only ever uses
+    small batch sizes (2) where accumulating a few create_graph=True
+    graphs at once was never the problem - see
+    _qm_regularizer_loss_and_backward below for why THIS pattern is unsafe
+    at the batch sizes fine_tune_stable actually needs."""
+    indices, y_weight, neg_dy_weight = _qm_sample_indices_and_weights(model, train_data, batch_size, rng)
+    total = torch.zeros((), device=device)
+    for idx in indices:
+        total = total + _qm_per_sample_loss(model, train_data, idx, device, y_weight, neg_dy_weight)
+    return total / len(indices)
+
+
+def _qm_regularizer_loss_and_backward(model, train_data, batch_size, device, rng, lambda_qm):
+    """L_QM for the real fine-tuning loop: calls .backward() ITSELF, per
+    sample, immediately - accumulating into model.parameters()' .grad
+    exactly as fine_tune_stable's optimizer expects, rather than returning
+    one differentiable summed loss for the caller to backward() once
+    (_qm_regularizer_loss above). This is not a style choice: the model's
+    internal derivative=True forward pass computes forces via
+    autograd.grad(energy, pos, create_graph=True), which keeps that
+    sample's ENTIRE first-order backward graph alive (needed to be
+    differentiable a second time) until something actually calls
+    backward() on it. Accumulating 8 such graphs into one running sum
+    before a single backward() - the original design, fine at
+    verify_qm_gradient.py's batch size of 2 but not here - held all 8
+    alive simultaneously and, in the first real (non-smoke) fine-tuning
+    run, was enough to exhaust a 47.5 GiB GPU on its own (this project's
+    own established batch_size for ordinary supervised training on this
+    exact model is 1-2, not 8 - a real, now-confirmed-not-hypothetical
+    memory cost of create_graph=True the original design underestimated).
+    Per-sample immediate backward() means at most ONE such graph is ever
+    alive at a time, regardless of batch_size. Gradients from repeated
+    .backward() calls accumulate into .grad by default (PyTorch's normal
+    behavior, reset only by the caller's own optimizer.zero_grad()) -
+    mathematically identical to a single backward() on the summed loss,
+    just without ever materializing every sample's graph at once.
+
+    Returns the (detached) scalar loss VALUE only, for logging - there is
+    no loss tensor to return since backward() already ran."""
+    indices, y_weight, neg_dy_weight = _qm_sample_indices_and_weights(model, train_data, batch_size, rng)
     n = len(indices)
-    return y_weight * (y_mse_total / n) + neg_dy_weight * (dy_mse_total / n)
+    total_value = 0.0
+    for idx in indices:
+        per_sample_loss = _qm_per_sample_loss(model, train_data, idx, device, y_weight, neg_dy_weight) / n
+        (lambda_qm * per_sample_loss).backward()
+        total_value += float(per_sample_loss.item())
+    return total_value
 
 
 def fine_tune_stable(
@@ -327,12 +376,20 @@ def fine_tune_stable(
         g_tensor = torch.tensor(np.stack(pooled_g), dtype=torch.float32, device=device)
         U_tensor = torch.stack(pooled_U)
 
-        loss_obs_pseudo = boltzmann_estimator_pseudo_loss(g_tensor, U_tensor, g_target, kT)
-        loss_qm = _qm_regularizer_loss(model, train_data, qm_batch_size, device, rng)
-        total_loss = loss_obs_pseudo + lambda_qm * loss_qm
-
+        # zero_grad ONCE up front, then two SEPARATE backward() calls
+        # (L_obs's own, then L_QM's per-sample ones inside
+        # _qm_regularizer_loss_and_backward) rather than summing both into
+        # one loss tensor first - gradients accumulate into .grad across
+        # repeated backward() calls by default, so this is mathematically
+        # identical to backward() on (L_obs + lambda_qm*L_QM) together,
+        # just without ever holding L_obs's graph and every L_QM sample's
+        # graph in memory simultaneously (see
+        # _qm_regularizer_loss_and_backward's docstring for why that
+        # exhausted a 47.5 GiB GPU in the first real run attempt).
         optimizer.zero_grad()
-        total_loss.backward()
+        loss_obs_pseudo = boltzmann_estimator_pseudo_loss(g_tensor, U_tensor, g_target, kT)
+        loss_obs_pseudo.backward()
+        qm_loss_value = _qm_regularizer_loss_and_backward(model, train_data, qm_batch_size, device, rng, lambda_qm)
         optimizer.step()
 
         with torch.no_grad():
@@ -343,7 +400,7 @@ def fine_tune_stable(
             "n_rewinds": n_rewinds_this_iter,
             "n_samples": len(pooled_U),
             "observable_loss_value": real_obs_value,
-            "qm_loss_value": float(loss_qm.item()),
+            "qm_loss_value": qm_loss_value,
         }
         history.append(record)
         print(
