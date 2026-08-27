@@ -157,6 +157,33 @@ def element_pair_intermolecular_distances(z: np.ndarray, dist_matrix: np.ndarray
     return out
 
 
+def frame_min_distances(z: np.ndarray, positions: np.ndarray, box_lengths: np.ndarray, same_molecule: np.ndarray) -> dict:
+    """Per-element-pair-type minimum cross-molecule distance for ONE frame -
+    the live-check counterpart of analyze_trajectory's per-frame body
+    (module docstring), factored out so a RUNNING simulation
+    (waterbox_langevin.py's StABlE stability check, paper/main.tex
+    sec:q4-stable-plan) and this script's post-hoc scan of an already-saved
+    rollout.xyz share the identical distance/exclusion logic, rather than a
+    second, separately-trusted copy of "is this frame anomalous". Returns
+    {pair_name: float}, using +inf (not NaN, unlike analyze_trajectory's own
+    CSV column - see that function's docstring) for a pair type with no
+    cross-molecule pairs at all, so a plain `< floor` comparison in
+    frame_violates_floors below never needs a NaN-aware special case."""
+    dist = pairwise_min_image_distances(positions, box_lengths)
+    per_type = element_pair_intermolecular_distances(z, dist, same_molecule)
+    return {name: float(arr.min()) if arr.size else float("inf") for name, arr in per_type.items()}
+
+
+def frame_violates_floors(min_distances: dict, floors: dict) -> bool:
+    """True if any element-pair-type's minimum cross-molecule distance in
+    this frame (frame_min_distances) is below its empirical floor
+    (compute_reference_floors) - the same per-frame threshold
+    analyze_trajectory already applies post-hoc (n_below_floor_{name} > 0),
+    exposed as its own function so a live simulation can call it directly
+    instead of writing a trajectory to disk and rescanning it afterward."""
+    return any(min_distances[name] < floors[name] for name in floors)
+
+
 def compute_reference_floors(
     data_root: str = "./data",
     n_reference_configs: int = 200,
