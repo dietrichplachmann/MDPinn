@@ -236,7 +236,7 @@ def fine_tune_stable(
     save_every=20,
     seed=42,
     device=None,
-    max_pooled_samples=12,
+    max_pooled_samples=5,
 ):
     """The alternating StABlE fine-tuning loop (module docstring). Writes a
     checkpoint every save_every outer iterations plus a final one, and a
@@ -252,29 +252,32 @@ def fine_tune_stable(
     evaluate_waterbox.py --per-sample check (module docstring) to confirm
     static accuracy hasn't regressed before trusting a real run's result.
 
-    max_pooled_samples=12 bounds how many collected Snapshots actually get
+    max_pooled_samples=5 bounds how many collected Snapshots actually get
     forwarded through _config_energy (each holding a create_graph=True graph
     simultaneously, unlike L_QM's per-sample-immediate-backward - the
     observable loss needs the whole pooled batch's covariance jointly, so
     this accumulation can't be avoided the same way) per outer iteration,
     regardless of n_replicas. Unlike n_replicas, this is NOT a knob to scale
-    up for more sample diversity - it exists purely as a memory ceiling and
-    should stay at whatever this pipeline has actually been shown to fit.
-    Without it, worst-case per-iteration pool size scales directly with
-    n_replicas: at iteration 0 every replica is still freshly-equilibrated
-    and stable, so each of the learn window's check_interval-spaced checks
-    (learn_window_steps/check_interval of them, 5 here) can pass, giving up
-    to ceil(5/subsample_stride)=3 samples/replica in that worst case. The
-    original 4-replica pilot's worst case (12 samples) is exactly what was
-    validated as fitting in 47.5GB ("pooled_U's own footprint was indeed
-    tolerable on its own" - see this module's history); scaling to
-    n_replicas=8 without a cap doubles that worst case to 24 and reproduced
-    a real CUDA OOM in this exact loop on the very first outer iteration
-    (46.53 of 47.5 GiB actually allocated, not fragmentation). 12 is set
-    here to match that already-demonstrated-safe ceiling exactly, not a
-    fresh guess. Excess collected snapshots beyond this cap are randomly
-    subsampled away (via the run's own rng) before any _config_energy call
-    is made on them - cheap, since Snapshots are plain numpy until then.
+    up for more sample diversity - it exists purely as a memory ceiling.
+
+    CORRECTED after a second real OOM, not a fresh guess this time: the
+    first cap attempt used 12 (a THEORETICAL worst case - 4 replicas x
+    ceil(5/subsample_stride)=3 samples/replica at iteration 0, when every
+    replica is still freshly-equilibrated and stable) reasoned to be safe
+    because the 4-replica pilot supposedly already "validated" it. It
+    hadn't: the pilot's own logged history never actually pooled more than
+    5 samples in any real iteration (instability naturally kept the true
+    count well under the 12-sample worst case) - 12 was never actually
+    exercised, so "already validated" was false, and n_replicas=8 capped at
+    12 OOM'd again at nearly identical memory usage (46.54 of 47.5 GiB) to
+    the uncapped n_replicas=8 crash before it. Lesson (CLAUDE.md's own,
+    re-learned the hard way here): calibrate a memory ceiling from what was
+    actually MEASURED to run, never from a theoretical worst-case
+    calculation on paper. 5 is the actually-observed pilot maximum, with
+    zero headroom assumed - the loop below also logs per-sample
+    torch.cuda.memory_allocated() growth on outer_iter==0 specifically so
+    a future increase to this cap is calibrated from real numbers, not
+    another guess.
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = Path(out_dir)
@@ -395,12 +398,24 @@ def fine_tune_stable(
             keep_idx = rng.choice(n_collected_this_iter, size=max_pooled_samples, replace=False)
             all_snapshots = [all_snapshots[i] for i in keep_idx]
 
+        # Per-sample memory growth, logged only on outer_iter==0 - gives a
+        # real, measured per-sample GPU cost for calibrating max_pooled_samples
+        # in a future run, rather than repeating the same "reason about it on
+        # paper first" mistake that got max_pooled_samples=12 wrong (see
+        # fine_tune_stable's docstring on the second real OOM this caused).
+        log_mem = outer_iter == 0 and device.startswith("cuda")
         pooled_g, pooled_U = [], []
-        for atoms, snap in all_snapshots:
+        for sample_i, (atoms, snap) in enumerate(all_snapshots):
             frame_atoms = _snapshot_to_atoms(snap, atoms)
             pooled_g.append(_stacked_rdf(frame_atoms, rmax, rdf_nbins))
             z_t, pos_t, box_t = tensors_from_atoms(frame_atoms, device)
             pooled_U.append(_config_energy(model, z_t, pos_t, box_t, device))
+            if log_mem:
+                allocated_gb = torch.cuda.memory_allocated(device) / 1e9
+                print(
+                    f"  [mem] iter 0, pooled_U sample {sample_i + 1}/{len(all_snapshots)}: "
+                    f"{allocated_gb:.2f} GB allocated"
+                )
 
         if len(pooled_U) < 2:
             print(
@@ -478,13 +493,14 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-6)
     parser.add_argument("--qm-batch-size", type=int, default=8)
     parser.add_argument(
-        "--max-pooled-samples", type=int, default=12,
+        "--max-pooled-samples", type=int, default=5,
         help="Memory ceiling, NOT a diversity knob - see fine_tune_stable's docstring. Caps how many "
         "collected snapshots get forwarded through _config_energy per iteration regardless of "
         "n_replicas, since that computation (unlike L_QM) must hold every sample's create_graph=True "
-        "graph simultaneously. Default 12 matches the exact worst case already validated safe with "
-        "n_replicas=4; raising n_replicas beyond that without also raising this (or leaving it as-is, "
-        "the recommended default) is what caused a real CUDA OOM at n_replicas=8's first iteration.",
+        "graph simultaneously. Default 5 is the actually-OBSERVED pilot maximum (zero headroom) - a "
+        "first attempt at 12 (a theoretical, never-actually-exercised worst case) still OOM'd at "
+        "n_replicas=8. Only raise this once iter-0's per-sample [mem] log lines from a real run show "
+        "clear headroom below the GPU's capacity.",
     )
     parser.add_argument("--save-every", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
