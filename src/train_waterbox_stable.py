@@ -236,6 +236,7 @@ def fine_tune_stable(
     save_every=20,
     seed=42,
     device=None,
+    max_pooled_samples=12,
 ):
     """The alternating StABlE fine-tuning loop (module docstring). Writes a
     checkpoint every save_every outer iterations plus a final one, and a
@@ -250,6 +251,30 @@ def fine_tune_stable(
     tuned - see this function's history.json output plus a post-hoc
     evaluate_waterbox.py --per-sample check (module docstring) to confirm
     static accuracy hasn't regressed before trusting a real run's result.
+
+    max_pooled_samples=12 bounds how many collected Snapshots actually get
+    forwarded through _config_energy (each holding a create_graph=True graph
+    simultaneously, unlike L_QM's per-sample-immediate-backward - the
+    observable loss needs the whole pooled batch's covariance jointly, so
+    this accumulation can't be avoided the same way) per outer iteration,
+    regardless of n_replicas. Unlike n_replicas, this is NOT a knob to scale
+    up for more sample diversity - it exists purely as a memory ceiling and
+    should stay at whatever this pipeline has actually been shown to fit.
+    Without it, worst-case per-iteration pool size scales directly with
+    n_replicas: at iteration 0 every replica is still freshly-equilibrated
+    and stable, so each of the learn window's check_interval-spaced checks
+    (learn_window_steps/check_interval of them, 5 here) can pass, giving up
+    to ceil(5/subsample_stride)=3 samples/replica in that worst case. The
+    original 4-replica pilot's worst case (12 samples) is exactly what was
+    validated as fitting in 47.5GB ("pooled_U's own footprint was indeed
+    tolerable on its own" - see this module's history); scaling to
+    n_replicas=8 without a cap doubles that worst case to 24 and reproduced
+    a real CUDA OOM in this exact loop on the very first outer iteration
+    (46.53 of 47.5 GiB actually allocated, not fragmentation). 12 is set
+    here to match that already-demonstrated-safe ceiling exactly, not a
+    fresh guess. Excess collected snapshots beyond this cap are randomly
+    subsampled away (via the run's own rng) before any _config_energy call
+    is made on them - cheap, since Snapshots are plain numpy until then.
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = Path(out_dir)
@@ -356,21 +381,37 @@ def fine_tune_stable(
         )
         n_rewinds_this_iter = [state.n_rewinds for state in replica_states]
 
+        # Flatten first (cheap - plain numpy Snapshots, no grad yet) so the
+        # max_pooled_samples cap can be applied BEFORE any _config_energy
+        # call, not after - see fine_tune_stable's own docstring on why an
+        # uncapped pool scales directly (and dangerously) with n_replicas.
+        all_snapshots = [
+            (atoms, snap)
+            for atoms, snapshots in zip(replica_atoms, collected_per_replica)
+            for snap in snapshots
+        ]
+        n_collected_this_iter = len(all_snapshots)
+        if n_collected_this_iter > max_pooled_samples:
+            keep_idx = rng.choice(n_collected_this_iter, size=max_pooled_samples, replace=False)
+            all_snapshots = [all_snapshots[i] for i in keep_idx]
+
         pooled_g, pooled_U = [], []
-        for atoms, snapshots in zip(replica_atoms, collected_per_replica):
-            for snap in snapshots:
-                frame_atoms = _snapshot_to_atoms(snap, atoms)
-                pooled_g.append(_stacked_rdf(frame_atoms, rmax, rdf_nbins))
-                z_t, pos_t, box_t = tensors_from_atoms(frame_atoms, device)
-                pooled_U.append(_config_energy(model, z_t, pos_t, box_t, device))
+        for atoms, snap in all_snapshots:
+            frame_atoms = _snapshot_to_atoms(snap, atoms)
+            pooled_g.append(_stacked_rdf(frame_atoms, rmax, rdf_nbins))
+            z_t, pos_t, box_t = tensors_from_atoms(frame_atoms, device)
+            pooled_U.append(_config_energy(model, z_t, pos_t, box_t, device))
 
         if len(pooled_U) < 2:
             print(
                 f"[iter {outer_iter}] only {len(pooled_U)} sample(s) survived this phase "
-                f"(rewinds={n_rewinds_this_iter}) - skipping this gradient step, boltzmann_estimator_pseudo_loss "
-                "needs N>=2."
+                f"(collected={n_collected_this_iter}, rewinds={n_rewinds_this_iter}) - skipping this gradient "
+                "step, boltzmann_estimator_pseudo_loss needs N>=2."
             )
-            history.append({"iter": outer_iter, "skipped": True, "n_rewinds": n_rewinds_this_iter, "n_samples": len(pooled_U)})
+            history.append({
+                "iter": outer_iter, "skipped": True, "n_rewinds": n_rewinds_this_iter,
+                "n_collected": n_collected_this_iter, "n_samples": len(pooled_U),
+            })
             continue
 
         g_tensor = torch.tensor(np.stack(pooled_g), dtype=torch.float32, device=device)
@@ -398,14 +439,15 @@ def fine_tune_stable(
             "iter": outer_iter,
             "skipped": False,
             "n_rewinds": n_rewinds_this_iter,
+            "n_collected": n_collected_this_iter,
             "n_samples": len(pooled_U),
             "observable_loss_value": real_obs_value,
             "qm_loss_value": qm_loss_value,
         }
         history.append(record)
         print(
-            f"[iter {outer_iter}] n_samples={len(pooled_U)} rewinds={n_rewinds_this_iter} "
-            f"L_obs(real)={real_obs_value:.6f} L_QM={record['qm_loss_value']:.6f}"
+            f"[iter {outer_iter}] n_samples={len(pooled_U)} (collected={n_collected_this_iter}) "
+            f"rewinds={n_rewinds_this_iter} L_obs(real)={real_obs_value:.6f} L_QM={record['qm_loss_value']:.6f}"
         )
 
         if (outer_iter + 1) % save_every == 0:
@@ -435,6 +477,15 @@ if __name__ == "__main__":
     parser.add_argument("--lambda-qm", type=float, default=1.0)
     parser.add_argument("--lr", type=float, default=1e-6)
     parser.add_argument("--qm-batch-size", type=int, default=8)
+    parser.add_argument(
+        "--max-pooled-samples", type=int, default=12,
+        help="Memory ceiling, NOT a diversity knob - see fine_tune_stable's docstring. Caps how many "
+        "collected snapshots get forwarded through _config_energy per iteration regardless of "
+        "n_replicas, since that computation (unlike L_QM) must hold every sample's create_graph=True "
+        "graph simultaneously. Default 12 matches the exact worst case already validated safe with "
+        "n_replicas=4; raising n_replicas beyond that without also raising this (or leaving it as-is, "
+        "the recommended default) is what caused a real CUDA OOM at n_replicas=8's first iteration.",
+    )
     parser.add_argument("--save-every", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -458,6 +509,7 @@ if __name__ == "__main__":
             subsample_stride=2, temperature_k=args.temperature_k, friction_fs_inv=args.friction_fs_inv,
             dt_fs=args.dt, lambda_qm=args.lambda_qm, lr=args.lr, qm_batch_size=2,
             n_reference_configs=20, save_every=1, seed=args.seed,
+            max_pooled_samples=args.max_pooled_samples,
         )
     else:
         fine_tune_stable(
@@ -467,4 +519,5 @@ if __name__ == "__main__":
             subsample_stride=args.subsample_stride, temperature_k=args.temperature_k,
             friction_fs_inv=args.friction_fs_inv, dt_fs=args.dt, lambda_qm=args.lambda_qm,
             lr=args.lr, qm_batch_size=args.qm_batch_size, save_every=args.save_every, seed=args.seed,
+            max_pooled_samples=args.max_pooled_samples,
         )
