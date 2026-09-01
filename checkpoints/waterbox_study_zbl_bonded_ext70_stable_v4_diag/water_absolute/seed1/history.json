@@ -1,0 +1,92 @@
+[
+  {
+    "iter": 0,
+    "skipped": false,
+    "n_rewinds": [
+      92,
+      89,
+      5,
+      79,
+      1,
+      3,
+      6,
+      100
+    ],
+    "n_collected": 40,
+    "n_samples": 5,
+    "observable_loss_value": 0.8137674927711487,
+    "qm_loss_value": 20.097143225371838
+  },
+  {
+    "iter": 1,
+    "skipped": false,
+    "n_rewinds": [
+      190,
+      187,
+      6,
+      165,
+      5,
+      4,
+      12,
+      200
+    ],
+    "n_collected": 40,
+    "n_samples": 5,
+    "observable_loss_value": 0.6453419923782349,
+    "qm_loss_value": 1644.6219482421875
+  },
+  {
+    "iter": 2,
+    "skipped": false,
+    "n_rewinds": [
+      289,
+      287,
+      7,
+      261,
+      7,
+      6,
+      13,
+      300
+    ],
+    "n_collected": 76,
+    "n_samples": 5,
+    "observable_loss_value": 0.6929826140403748,
+    "qm_loss_value": 190.9181890487671
+  },
+  {
+    "iter": 3,
+    "skipped": false,
+    "n_rewinds": [
+      389,
+      386,
+      11,
+      350,
+      7,
+      8,
+      21,
+      400
+    ],
+    "n_collected": 83,
+    "n_samples": 5,
+    "observable_loss_value": 0.7803013920783997,
+    "qm_loss_value": 271.5646800994873
+  },
+  {
+    "iter": 4,
+    "skipped": false,
+    "n_rewinds": [
+      489,
+      482,
+      12,
+      443,
+      9,
+      15,
+      25,
+      500
+    ],
+    "n_collected": 29,
+    "n_samples": 5,
+    "observable_loss_value": 0.6800389885902405,
+    "qm_loss_value": 838.4568939208984
+  }
+]
