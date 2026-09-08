@@ -1,0 +1,41 @@
+[
+  {
+    "iter": 0,
+    "skipped": false,
+    "n_rewinds": [
+      4,
+      0,
+      0
+    ],
+    "n_collected": 4,
+    "n_samples": 254,
+    "observable_loss_value": 0.00014172423107083887,
+    "qm_loss_value": 17.592985093593597
+  },
+  {
+    "iter": 1,
+    "skipped": false,
+    "n_rewinds": [
+      8,
+      0,
+      0
+    ],
+    "n_collected": 4,
+    "n_samples": 254,
+    "observable_loss_value": 0.000149666826473549,
+    "qm_loss_value": 40.29646374285221
+  },
+  {
+    "iter": 2,
+    "skipped": false,
+    "n_rewinds": [
+      12,
+      0,
+      0
+    ],
+    "n_collected": 4,
+    "n_samples": 254,
+    "observable_loss_value": 0.00015330626047216356,
+    "qm_loss_value": 12.809451818466187
+  }
+]
