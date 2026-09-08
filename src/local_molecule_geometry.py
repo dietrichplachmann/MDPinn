@@ -49,12 +49,35 @@ def per_molecule_mean_oh_bond_length(z, positions, box_lengths, group_ids):
     (diagnose_short_range_collapse.molecule_group_ids' own convention,
     contiguous ids in [0, num_molecules), one O + two H per group for pure
     water - the same assumption diagnose_short_range_collapse.py already
-    makes) -> (num_molecules,) numpy array, g(gamma) per molecule: the mean
-    of that molecule's own two O-H distances (Raja et al. 2025 Section
-    4.4's exact water observable), periodicity-aware via this project's own
-    established minimum-image convention (pairwise_min_image_distances -
-    not ase.geometry.get_distances, matching every other distance
-    computation in this codebase).
+    makes, USUALLY true) -> (values, valid_group_ids): g(gamma) per
+    molecule that actually resolved to exactly 1 O + 2 H (the mean of that
+    molecule's own two O-H distances, Raja et al. 2025 Section 4.4's exact
+    water observable), periodicity-aware via this project's own established
+    minimum-image convention (pairwise_min_image_distances - not
+    ase.geometry.get_distances, matching every other distance computation
+    in this codebase), and the corresponding molecule ids `values` maps to.
+
+    A molecule NOT resolving to exactly 1 O + 2 H is skipped (not raised as
+    an error) - confirmed on a real training-box smoke test to happen on
+    real DFT reference configurations (not just a hypothetical edge case):
+    distance-threshold bond inference (structural_metrics.infer_bonds,
+    shared by molecule_group_ids) occasionally misses a real but thermally
+    stretched O-H bond, splitting one water molecule into two degenerate
+    groups - evaluate_waterbox.py's own summarize_molecule_groups already
+    anticipated exactly this ("asserting every water molecule works out to
+    exactly {O: 1, H: 2}, not some other split caused by a missed/spurious
+    bond") without ever having been strictly enforced before this function.
+    Given ~12,800 molecules sampled for a typical reference average
+    (n_reference_configs=200 x 64 molecules), skipping the rare degenerate
+    one is a negligible approximation, not a bug to work around by raising.
+
+    values[i] corresponds to molecule valid_group_ids[i], NOT necessarily
+    to molecule i, once any molecule has been skipped - callers pairing
+    this with a per-molecule energy tensor (e.g. local_molecule_energies,
+    computed for ALL num_molecules regardless of composition, since a pure
+    energy scatter-sum doesn't care about elemental identity) MUST index
+    that tensor by valid_group_ids too, to keep g and U paired by molecule
+    identity - see train_waterbox_stable.py's own call site.
 
     Pure geometry, no gradient - g never carries a grad path through the
     sampler (boltzmann_estimator.py's own requirement, already established
@@ -74,16 +97,22 @@ def per_molecule_mean_oh_bond_length(z, positions, box_lengths, group_ids):
     o_mask = z == 8
     h_mask = z == 1
     num_molecules = int(group_ids.max()) + 1 if group_ids.size else 0
-    out = np.empty(num_molecules, dtype=np.float64)
+    values, valid_ids = [], []
+    n_skipped = 0
     for gid in range(num_molecules):
         atoms = np.where(group_ids == gid)[0]
         o_idx = atoms[o_mask[atoms]]
         h_idx = atoms[h_mask[atoms]]
         if o_idx.size != 1 or h_idx.size != 2:
-            raise ValueError(
-                f"molecule {gid} has {o_idx.size} O and {h_idx.size} H atoms - expected exactly "
-                "1 O and 2 H per molecule for pure water; molecule_group_ids grouping may be wrong "
-                "for this configuration."
-            )
-        out[gid] = dist[o_idx[0], h_idx].mean()
-    return out
+            n_skipped += 1
+            continue
+        values.append(dist[o_idx[0], h_idx].mean())
+        valid_ids.append(gid)
+    if n_skipped:
+        print(
+            f"WARNING: per_molecule_mean_oh_bond_length skipped {n_skipped}/{num_molecules} "
+            "molecule(s) that did not resolve to exactly 1 O + 2 H (most likely a bond-inference "
+            "miss on a thermally stretched O-H distance, not a code bug - see this function's "
+            "docstring)."
+        )
+    return np.asarray(values, dtype=np.float64), np.asarray(valid_ids, dtype=np.int64)

@@ -163,5 +163,6 @@ def sample_reference_mean_oh_bond_length(full_dataset, n_samples=200, seed=42):
         pos = sample.pos.detach().cpu().numpy()
         box_lengths = np.asarray(sample.box).reshape(3, 3).diagonal()
         group_ids = molecule_group_ids(z, pos, box_lengths)
-        all_values.extend(per_molecule_mean_oh_bond_length(z, pos, box_lengths, group_ids).tolist())
+        values, _valid_ids = per_molecule_mean_oh_bond_length(z, pos, box_lengths, group_ids)
+        all_values.extend(values.tolist())
     return float(np.mean(all_values))

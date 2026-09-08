@@ -47,16 +47,17 @@ def _synthetic_two_molecule_box(box_length=10.0):
 
 def check_bond_lengths():
     z, positions, group_ids, box_lengths = _synthetic_two_molecule_box()
-    result = per_molecule_mean_oh_bond_length(z, positions, box_lengths, group_ids)
+    values, valid_ids = per_molecule_mean_oh_bond_length(z, positions, box_lengths, group_ids)
+    by_id = dict(zip(valid_ids.tolist(), values.tolist()))
 
     expected = {0: 0.95, 1: 1.10}
-    ok = True
+    ok = len(valid_ids) == 2
     for gid, expected_len in expected.items():
-        actual = result[gid]
-        err = abs(actual - expected_len)
+        actual = by_id.get(gid)
+        err = abs(actual - expected_len) if actual is not None else float("inf")
         status = "PASS" if err < 1e-6 else "FAIL"
         ok = ok and err < 1e-6
-        print(f"  molecule {gid}: expected {expected_len:.4f} A, got {actual:.4f} A ({status})")
+        print(f"  molecule {gid}: expected {expected_len:.4f} A, got {actual} A ({status})")
     return ok
 
 
@@ -83,12 +84,14 @@ def check_bond_length_periodicity():
     group_ids = np.array([0, 0, 0, 1, 1, 1])
     box_lengths = np.array([box_length, box_length, box_length])
 
-    result = per_molecule_mean_oh_bond_length(z, positions, box_lengths, group_ids)
+    values, valid_ids = per_molecule_mean_oh_bond_length(z, positions, box_lengths, group_ids)
+    by_id = dict(zip(valid_ids.tolist(), values.tolist()))
     # h1a is placed 0.3 A from o1 across the wrapped boundary (0.2 - (9.9 - 10.0) = 0.3).
     expected_mol1 = (0.3 + 1.10) / 2
-    err = abs(result[1] - expected_mol1)
+    actual = by_id.get(1)
+    err = abs(actual - expected_mol1) if actual is not None else float("inf")
     status = "PASS" if err < 1e-6 else "FAIL"
-    print(f"  molecule 1 (periodic-wrapped H): expected {expected_mol1:.4f} A, got {result[1]:.4f} A ({status})")
+    print(f"  molecule 1 (periodic-wrapped H): expected {expected_mol1:.4f} A, got {actual} A ({status})")
     return err < 1e-6
 
 
@@ -117,21 +120,56 @@ def check_local_molecule_energies():
     return value_ok and grad_ok
 
 
-def check_malformed_molecule_raises():
-    """A molecule with 2 O and 1 H (not pure water) should raise, not
-    silently produce a wrong number - per_molecule_mean_oh_bond_length's
-    own documented assumption."""
+def check_malformed_molecule_skipped():
+    """A molecule with 2 O and 1 H (not pure water - e.g. a bond-inference
+    miss splitting one real water molecule into two degenerate groups, the
+    exact failure a real training-box smoke test hit on real DFT reference
+    data) should be SKIPPED, not raised or silently miscomputed -
+    per_molecule_mean_oh_bond_length's own documented, corrected behavior
+    (an earlier version of this function raised ValueError here instead;
+    that was too strict for something this project has now confirmed
+    happens on real data, not just a hypothetical edge case)."""
     z = np.array([8, 8, 1])
     positions = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 0.0, 0.0]])
     group_ids = np.array([0, 0, 0])
     box_lengths = np.array([10.0, 10.0, 10.0])
-    try:
-        per_molecule_mean_oh_bond_length(z, positions, box_lengths, group_ids)
-        print("  FAIL: expected ValueError for a non-water molecule, none raised")
-        return False
-    except ValueError as exc:
-        print(f"  PASS: raised ValueError as expected ({exc})")
-        return True
+    values, valid_ids = per_molecule_mean_oh_bond_length(z, positions, box_lengths, group_ids)
+    ok = values.size == 0 and valid_ids.size == 0
+    print(f"  values={values.tolist()}, valid_ids={valid_ids.tolist()} ({'PASS' if ok else 'FAIL'})")
+    return ok
+
+
+def check_mixed_valid_and_degenerate_molecules():
+    """3 molecules: two normal (1 O + 2 H each), one degenerate (2 O + 1 H,
+    e.g. from a missed bond) - confirms the degenerate one is skipped while
+    the two valid ones are still correctly computed AND correctly
+    identified by valid_ids (not silently index-shifted), the exact
+    scenario train_waterbox_stable.py's real loop depends on to keep g and
+    U paired by molecule identity when a skip happens."""
+    o0 = np.array([1.0, 1.0, 1.0])
+    h0a = o0 + np.array([0.95, 0.0, 0.0])
+    h0b = o0 + np.array([0.0, 0.95, 0.0])
+    o1 = np.array([5.0, 5.0, 5.0])
+    h1a = o1 + np.array([1.10, 0.0, 0.0])
+    h1b = o1 + np.array([0.0, 0.0, 1.10])
+    # Degenerate molecule 1 (id 1) sits BETWEEN the two valid ones (ids 0
+    # and 2) in storage/id order, so a naive index-shift bug (skip one,
+    # forget to renumber) would misassign molecule 2's value to id 1.
+    o_bad1 = np.array([8.0, 8.0, 8.0])
+    o_bad2 = o_bad1 + np.array([1.0, 0.0, 0.0])
+    h_bad = o_bad1 + np.array([0.5, 0.5, 0.0])
+
+    positions = np.stack([o0, h0a, h0b, o_bad1, o_bad2, h_bad, o1, h1a, h1b])
+    z = np.array([8, 1, 1, 8, 8, 1, 8, 1, 1])
+    group_ids = np.array([0, 0, 0, 1, 1, 1, 2, 2, 2])
+    box_lengths = np.array([10.0, 10.0, 10.0])
+
+    values, valid_ids = per_molecule_mean_oh_bond_length(z, positions, box_lengths, group_ids)
+    by_id = dict(zip(valid_ids.tolist(), values.tolist()))
+    ok = set(valid_ids.tolist()) == {0, 2}
+    ok = ok and abs(by_id[0] - 0.95) < 1e-6 and abs(by_id[2] - 1.10) < 1e-6
+    print(f"  valid_ids={sorted(valid_ids.tolist())} (expected [0, 2]), by_id={by_id} ({'PASS' if ok else 'FAIL'})")
+    return ok
 
 
 if __name__ == "__main__":
@@ -141,8 +179,11 @@ if __name__ == "__main__":
     ok2 = check_bond_length_periodicity()
     print("\nCheck 3: local_molecule_energies (value + gradient routing)")
     ok3 = check_local_molecule_energies()
-    print("\nCheck 4: malformed molecule raises ValueError")
-    ok4 = check_malformed_molecule_raises()
+    print("\nCheck 4: malformed (all-degenerate) molecule skipped, not raised")
+    ok4 = check_malformed_molecule_skipped()
+    print("\nCheck 5: mixed valid + degenerate molecules - skip realigns by molecule id, not index-shifted")
+    ok5 = check_mixed_valid_and_degenerate_molecules()
 
-    all_ok = ok1 and ok2 and ok3 and ok4
-    print(f"\n{'ALL CHECKS PASSED' if all_ok else 'SOME CHECKS FAILED'} ({sum([ok1, ok2, ok3, ok4])}/4)")
+    results = [ok1, ok2, ok3, ok4, ok5]
+    all_ok = all(results)
+    print(f"\n{'ALL CHECKS PASSED' if all_ok else 'SOME CHECKS FAILED'} ({sum(results)}/{len(results)})")

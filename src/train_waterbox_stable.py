@@ -495,16 +495,24 @@ def fine_tune_stable(
                 # pre_reduce hook) - not a second, separately-trusted forward
                 # call.
                 _config_energy(model, z_t, pos_t, box_t, device)
-                local_U = local_molecule_energies(
-                    capture.captured, replica_group_ids_torch[replica_i], num_molecules_per_system,
-                )
-                local_g = per_molecule_mean_oh_bond_length(
+                local_g, valid_ids = per_molecule_mean_oh_bond_length(
                     frame_atoms.get_atomic_numbers(), frame_atoms.get_positions(),
                     np.array(frame_atoms.get_cell()).diagonal(), replica_group_ids_np[replica_i],
                 )
+                # local_molecule_energies computes one U per molecule
+                # REGARDLESS of composition (a pure scatter-sum doesn't
+                # care about element identity), but local_g may have
+                # skipped a molecule that didn't resolve to 1 O + 2 H (see
+                # per_molecule_mean_oh_bond_length's docstring) - index by
+                # valid_ids so g[i] and U[i] stay paired to the SAME
+                # molecule, not silently misaligned by a skip.
+                local_U_full = local_molecule_energies(
+                    capture.captured, replica_group_ids_torch[replica_i], num_molecules_per_system,
+                )
+                local_U = local_U_full[torch.as_tensor(valid_ids, dtype=torch.long, device=device)]
                 pooled_g.extend(local_g.tolist())
                 pooled_U.extend(local_U)
-                n_local_this_snapshot = num_molecules_per_system
+                n_local_this_snapshot = len(valid_ids)
             else:
                 pooled_g.append(_stacked_rdf(frame_atoms, rmax, rdf_nbins))
                 pooled_U.append(_config_energy(model, z_t, pos_t, box_t, device))
