@@ -1,0 +1,362 @@
+[
+  {
+    "iter": 0,
+    "skipped": false,
+    "n_rewinds": [
+      92,
+      89,
+      6,
+      79,
+      0,
+      2,
+      9,
+      100
+    ],
+    "n_collected": 88,
+    "n_samples": 5,
+    "observable_loss_value": 0.6111965775489807,
+    "qm_loss_value": 20.104326903820038
+  },
+  {
+    "iter": 1,
+    "skipped": false,
+    "n_rewinds": [
+      190,
+      187,
+      12,
+      165,
+      4,
+      5,
+      72,
+      200
+    ],
+    "n_collected": 43,
+    "n_samples": 5,
+    "observable_loss_value": 0.7141252756118774,
+    "qm_loss_value": 157.7726492881775
+  },
+  {
+    "iter": 2,
+    "skipped": false,
+    "n_rewinds": [
+      289,
+      286,
+      15,
+      261,
+      7,
+      6,
+      171,
+      300
+    ],
+    "n_collected": 44,
+    "n_samples": 5,
+    "observable_loss_value": 0.7237308621406555,
+    "qm_loss_value": 54.348538249731064
+  },
+  {
+    "iter": 3,
+    "skipped": false,
+    "n_rewinds": [
+      389,
+      385,
+      16,
+      349,
+      8,
+      10,
+      271,
+      400
+    ],
+    "n_collected": 81,
+    "n_samples": 5,
+    "observable_loss_value": 0.8068097233772278,
+    "qm_loss_value": 11.782040569931269
+  },
+  {
+    "iter": 4,
+    "skipped": false,
+    "n_rewinds": [
+      489,
+      480,
+      20,
+      442,
+      8,
+      15,
+      368,
+      500
+    ],
+    "n_collected": 89,
+    "n_samples": 5,
+    "observable_loss_value": 0.9975054264068604,
+    "qm_loss_value": 54.81594640016556
+  },
+  {
+    "iter": 5,
+    "skipped": false,
+    "n_rewinds": [
+      589,
+      576,
+      23,
+      540,
+      11,
+      21,
+      458,
+      600
+    ],
+    "n_collected": 42,
+    "n_samples": 5,
+    "observable_loss_value": 0.946963906288147,
+    "qm_loss_value": 99.78231430053711
+  },
+  {
+    "iter": 6,
+    "skipped": false,
+    "n_rewinds": [
+      689,
+      667,
+      28,
+      638,
+      12,
+      26,
+      553,
+      700
+    ],
+    "n_collected": 17,
+    "n_samples": 5,
+    "observable_loss_value": 0.9468126893043518,
+    "qm_loss_value": 40.57561868429184
+  },
+  {
+    "iter": 7,
+    "skipped": false,
+    "n_rewinds": [
+      789,
+      762,
+      29,
+      730,
+      12,
+      29,
+      642,
+      800
+    ],
+    "n_collected": 119,
+    "n_samples": 5,
+    "observable_loss_value": 0.8849332928657532,
+    "qm_loss_value": 11.877218507230282
+  },
+  {
+    "iter": 8,
+    "skipped": false,
+    "n_rewinds": [
+      888,
+      852,
+      32,
+      828,
+      15,
+      34,
+      733,
+      900
+    ],
+    "n_collected": 25,
+    "n_samples": 5,
+    "observable_loss_value": 0.9037657976150513,
+    "qm_loss_value": 13.527136467397213
+  },
+  {
+    "iter": 9,
+    "skipped": false,
+    "n_rewinds": [
+      988,
+      943,
+      35,
+      913,
+      16,
+      37,
+      822,
+      1000
+    ],
+    "n_collected": 52,
+    "n_samples": 5,
+    "observable_loss_value": 0.976179301738739,
+    "qm_loss_value": 37.82273244857788
+  },
+  {
+    "iter": 10,
+    "skipped": false,
+    "n_rewinds": [
+      1087,
+      1041,
+      41,
+      988,
+      19,
+      43,
+      915,
+      1100
+    ],
+    "n_collected": 11,
+    "n_samples": 5,
+    "observable_loss_value": 0.6138054132461548,
+    "qm_loss_value": 69.58302640914917
+  },
+  {
+    "iter": 11,
+    "skipped": false,
+    "n_rewinds": [
+      1187,
+      1138,
+      47,
+      1075,
+      20,
+      46,
+      1010,
+      1200
+    ],
+    "n_collected": 30,
+    "n_samples": 5,
+    "observable_loss_value": 0.8446891903877258,
+    "qm_loss_value": 43.41747307777405
+  },
+  {
+    "iter": 12,
+    "skipped": false,
+    "n_rewinds": [
+      1287,
+      1235,
+      55,
+      1158,
+      26,
+      51,
+      1109,
+      1300
+    ],
+    "n_collected": 25,
+    "n_samples": 5,
+    "observable_loss_value": 0.7369190454483032,
+    "qm_loss_value": 20.709796972572803
+  },
+  {
+    "iter": 13,
+    "skipped": false,
+    "n_rewinds": [
+      1387,
+      1334,
+      58,
+      1235,
+      26,
+      55,
+      1204,
+      1400
+    ],
+    "n_collected": 69,
+    "n_samples": 5,
+    "observable_loss_value": 0.8682358860969543,
+    "qm_loss_value": 6.164043411612511
+  },
+  {
+    "iter": 14,
+    "skipped": false,
+    "n_rewinds": [
+      1487,
+      1432,
+      61,
+      1315,
+      28,
+      58,
+      1304,
+      1500
+    ],
+    "n_collected": 20,
+    "n_samples": 5,
+    "observable_loss_value": 0.6568361520767212,
+    "qm_loss_value": 11.651872128248215
+  },
+  {
+    "iter": 15,
+    "skipped": false,
+    "n_rewinds": [
+      1587,
+      1528,
+      66,
+      1396,
+      33,
+      66,
+      1394,
+      1600
+    ],
+    "n_collected": 35,
+    "n_samples": 5,
+    "observable_loss_value": 0.7966349720954895,
+    "qm_loss_value": 31.50210666656494
+  },
+  {
+    "iter": 16,
+    "skipped": false,
+    "n_rewinds": [
+      1687,
+      1626,
+      66,
+      1471,
+      37,
+      69,
+      1490,
+      1700
+    ],
+    "n_collected": 64,
+    "n_samples": 5,
+    "observable_loss_value": 0.7219172120094299,
+    "qm_loss_value": 43.97903971374035
+  },
+  {
+    "iter": 17,
+    "skipped": false,
+    "n_rewinds": [
+      1787,
+      1724,
+      69,
+      1536,
+      37,
+      70,
+      1589,
+      1800
+    ],
+    "n_collected": 102,
+    "n_samples": 5,
+    "observable_loss_value": 0.7833868861198425,
+    "qm_loss_value": 34.446022778749466
+  },
+  {
+    "iter": 18,
+    "skipped": false,
+    "n_rewinds": [
+      1887,
+      1819,
+      72,
+      1599,
+      39,
+      70,
+      1688,
+      1900
+    ],
+    "n_collected": 59,
+    "n_samples": 5,
+    "observable_loss_value": 0.5520657896995544,
+    "qm_loss_value": 3.1477885507047176
+  },
+  {
+    "iter": 19,
+    "skipped": false,
+    "n_rewinds": [
+      1987,
+      1917,
+      80,
+      1657,
+      42,
+      70,
+      1787,
+      2000
+    ],
+    "n_collected": 74,
+    "n_samples": 5,
+    "observable_loss_value": 0.6692948341369629,
+    "qm_loss_value": 12.434111773967743
+  }
+]
