@@ -14,15 +14,39 @@ One StABlE outer iteration:
   2. All replicas' collected Snapshots are pooled into one batch (the
      estimator only needs "samples from P_theta", not which replica they
      came from - paper/main.tex sec:q4-stable-step1).
-  3. For each pooled sample: g_i = its O-O/O-H/H-H RDF (pure geometry, no
-     grad - reuses rollout_waterbox_ase.py's already-validated RDF
-     machinery), U_i = the model's predicted total energy there (a fresh
-     forward pass WITH grad enabled, tracing back to theta).
-  4. boltzmann_estimator_pseudo_loss(g, U, g_target, kT) gives L_obs;
-     L_QM is the ordinary supervised energy/force MSE on a small batch of
-     real labeled TRAINING-split data (never on the sampled/simulated
-     configurations - see boltzmann_estimator.py's docstring on why L_QM
-     is a pure regularizer here, unlike active learning).
+  3. For each pooled snapshot: (default, global observable) g_i = its
+     O-O/O-H/H-H RDF (pure geometry, no grad - reuses
+     rollout_waterbox_ase.py's already-validated RDF machinery), U_i = the
+     model's predicted total energy there (a fresh forward pass WITH grad
+     enabled, tracing back to theta) - ONE (g, U) pair per snapshot.
+     (local_observable=True) each snapshot instead yields UP TO 64 (g, U)
+     pairs, one per water molecule: g = that molecule's own mean O-H bond
+     length (Raja et al. 2025 Section 4.4's exact water observable), U =
+     that molecule's own atomic energies summed (captured from the SAME
+     forward pass via local_molecule_observable.AtomicEnergyCapture, not a
+     second, separate forward call) - see paper/main.tex
+     sec:q4-stable-local-estimator-scope for the full rationale (a global,
+     whole-box RDF is, by Raja et al.'s own stated reasoning, structurally
+     insensitive to the localized failure mode this project's own Q1
+     force-error finding already identified as the real cause of rollout
+     instability) and why this should also fix the chronic
+     sample-starvation problem max_pooled_samples exists to guard against
+     (up to 64 samples per snapshot at negligible extra memory cost, since
+     the dominant per-snapshot cost - the model's internal
+     create_graph=True force computation - is paid once regardless of how
+     many local sums get extracted from the resulting per-atom tensor
+     afterward).
+  4. boltzmann_estimator_pseudo_loss(g, U, g_target, kT) gives L_obs (needs
+     NO changes for the local-observable case - it is already generic over
+     sample count and observable dimensionality, verified for both the
+     scalar [N] case (used here) and the vector [N, B] case (the RDF
+     default) in its own test suite); L_QM is the ordinary supervised
+     energy/force MSE on a small batch of real labeled TRAINING-split data
+     (never on the sampled/simulated configurations - see
+     boltzmann_estimator.py's docstring on why L_QM is a pure regularizer
+     here, unlike active learning) - completely unaffected by
+     local_observable, still regularizing against the model's FULL forward
+     pass (GNN + any active prior together).
   5. One optimizer.step() on L_obs + lambda_qm * L_QM.
 
 Deliberately NOT batched into one multi-graph forward pass per gradient
@@ -75,6 +99,8 @@ from diagnose_short_range_collapse import (
     same_molecule_mask,
 )
 from evaluate_waterbox import load_waterbox_checkpoint
+from local_molecule_geometry import local_molecule_energies, per_molecule_mean_oh_bond_length
+from local_molecule_observable import attach_atomic_energy_capture, sample_reference_mean_oh_bond_length
 from waterbox_ase import TensorNetCalculator, atoms_from_waterbox_sample, tensors_from_atoms
 from waterbox_data import load_waterbox_dataset, random_split
 from waterbox_langevin import ReplicaState, Snapshot, run_stable_sampling_phase
@@ -237,6 +263,7 @@ def fine_tune_stable(
     seed=42,
     device=None,
     max_pooled_samples=5,
+    local_observable=False,
 ):
     """The alternating StABlE fine-tuning loop (module docstring). Writes a
     checkpoint every save_every outer iterations plus a final one, and a
@@ -278,6 +305,17 @@ def fine_tune_stable(
     torch.cuda.memory_allocated() growth on outer_iter==0 specifically so
     a future increase to this cap is calibrated from real numbers, not
     another guess.
+
+    local_observable=False (default) preserves the original whole-box RDF
+    behavior exactly, unchanged - existing commands/results remain
+    reproducible. Set True to use the localized per-molecule Boltzmann
+    estimator instead (paper/main.tex sec:q4-stable-local-estimator-scope):
+    max_pooled_samples still caps how many SNAPSHOTS get forwarded through
+    a model call per iteration (the real memory-relevant quantity,
+    unchanged meaning), but each forwarded snapshot now yields up to
+    num_molecules_per_system (g, U) pairs instead of exactly 1, so the
+    total pooled sample count (and therefore the estimator's effective
+    statistical power) is much larger for the same memory budget.
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = Path(out_dir)
@@ -289,11 +327,25 @@ def fine_tune_stable(
     model = load_waterbox_checkpoint(ckpt, device=device)
     model.train()
 
+    # Attached transiently, in-memory only - NOT saved into any checkpoint
+    # (local_molecule_observable.py's own docstring on why this prior needs
+    # no reload-time re-registration the way MolecularZBL does). None in
+    # global-observable mode, so every local_observable-gated code path
+    # below is unreachable and the capture object is simply never touched.
+    capture = attach_atomic_energy_capture(model) if local_observable else None
+
     full_dataset = load_waterbox_dataset(data_root=data_root)
     train_data, _val_data, _test_data = random_split(full_dataset, seed=seed)
 
-    print("Sampling reference DFT configurations for the RDF target...")
-    reference_frames = _sample_reference_frames(full_dataset, n_samples=n_reference_configs, seed=seed)
+    if local_observable:
+        print("Sampling reference DFT configurations for the mean-O-H-bond-length target...")
+        g_target = torch.tensor(
+            sample_reference_mean_oh_bond_length(full_dataset, n_samples=n_reference_configs, seed=seed),
+            dtype=torch.float32, device=device,
+        )
+    else:
+        print("Sampling reference DFT configurations for the RDF target...")
+        reference_frames = _sample_reference_frames(full_dataset, n_samples=n_reference_configs, seed=seed)
 
     print("Computing Q4 short-range-collapse stability floors (diagnose_short_range_collapse.py)...")
     floors, _floor_stats = compute_reference_floors(
@@ -303,6 +355,11 @@ def fine_tune_stable(
     print(f"Building {n_replicas} replicas from distinct training-split starting configurations...")
     replica_indices = rng.choice(len(train_data), size=n_replicas, replace=False)
     replica_atoms, replica_states, same_molecule_masks = [], [], []
+    # Only populated/used when local_observable=True - one fixed grouping
+    # per replica (topology doesn't change during a run), same convention
+    # as same_molecule_masks above (computed once, reused every iteration).
+    replica_group_ids_np, replica_group_ids_torch = [], []
+    num_molecules_per_system = None
     for replica_i, idx in enumerate(replica_indices):
         sample = train_data[int(idx)]
         atoms = atoms_from_waterbox_sample(sample)
@@ -333,23 +390,39 @@ def fine_tune_stable(
         box_lengths = np.array(atoms.get_cell()).diagonal()
         group_ids = molecule_group_ids(z, positions, box_lengths)
         same_molecule_masks.append(same_molecule_mask(group_ids))
+        if local_observable:
+            replica_group_ids_np.append(group_ids)
+            replica_group_ids_torch.append(torch.as_tensor(group_ids, dtype=torch.long, device=device))
+            # Same fixed atom count/ordering assumption molecular_zbl.py's
+            # atoms_per_system already relies on (one system, different
+            # geometries) - every replica has the same num_molecules, so
+            # computing it once from replica 0 is sufficient, not a
+            # per-replica quantity.
+            if num_molecules_per_system is None:
+                num_molecules_per_system = int(group_ids.max()) + 1
 
         initial_snapshot = Snapshot(positions=positions.copy(), velocities=atoms.get_velocities().copy(), step=0)
         replica_states.append(ReplicaState(initial_snapshot))
         replica_atoms.append(atoms)
 
-    # rmax computed from BOTH the reference frames AND the replicas' own
-    # starting boxes, not just the reference sample - rollout_waterbox_ase.py
-    # learned this the hard way (its own comment: "the reference sample is
-    # what actually triggered CellTooSmall on the training box"). Box size
-    # is fixed per replica for the whole run (constant-volume Langevin, no
-    # barostat), so each replica's starting atoms object's cell is the only
-    # one that matters here, not every later Snapshot's.
-    rmax = _safe_rmax(reference_frames + replica_atoms, rdf_rmax)
-    g_target_parts = [
-        _averaged_rdf(reference_frames, rmax, rdf_nbins, elems)[0] for _, elems in ELEMENT_PAIRS
-    ]
-    g_target = torch.tensor(np.concatenate(g_target_parts), dtype=torch.float32, device=device)
+    if local_observable:
+        # No RDF machinery needed at all for the local observable - g is a
+        # per-molecule scalar (mean O-H bond length), not a histogram.
+        rmax = None
+    else:
+        # rmax computed from BOTH the reference frames AND the replicas' own
+        # starting boxes, not just the reference sample -
+        # rollout_waterbox_ase.py learned this the hard way (its own
+        # comment: "the reference sample is what actually triggered
+        # CellTooSmall on the training box"). Box size is fixed per replica
+        # for the whole run (constant-volume Langevin, no barostat), so each
+        # replica's starting atoms object's cell is the only one that
+        # matters here, not every later Snapshot's.
+        rmax = _safe_rmax(reference_frames + replica_atoms, rdf_rmax)
+        g_target_parts = [
+            _averaged_rdf(reference_frames, rmax, rdf_nbins, elems)[0] for _, elems in ELEMENT_PAIRS
+        ]
+        g_target = torch.tensor(np.concatenate(g_target_parts), dtype=torch.float32, device=device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     history = []
@@ -388,9 +461,13 @@ def fine_tune_stable(
         # max_pooled_samples cap can be applied BEFORE any _config_energy
         # call, not after - see fine_tune_stable's own docstring on why an
         # uncapped pool scales directly (and dangerously) with n_replicas.
+        # replica_i is carried through (not just discarded) so the
+        # local-observable path below can look up THAT replica's own
+        # molecule grouping - different replicas start from different
+        # sampled configurations, so their group_ids differ.
         all_snapshots = [
-            (atoms, snap)
-            for atoms, snapshots in zip(replica_atoms, collected_per_replica)
+            (replica_i, atoms, snap)
+            for replica_i, (atoms, snapshots) in enumerate(zip(replica_atoms, collected_per_replica))
             for snap in snapshots
         ]
         n_collected_this_iter = len(all_snapshots)
@@ -405,16 +482,38 @@ def fine_tune_stable(
         # fine_tune_stable's docstring on the second real OOM this caused).
         log_mem = outer_iter == 0 and device.startswith("cuda")
         pooled_g, pooled_U = [], []
-        for sample_i, (atoms, snap) in enumerate(all_snapshots):
+        for sample_i, (replica_i, atoms, snap) in enumerate(all_snapshots):
             frame_atoms = _snapshot_to_atoms(snap, atoms)
-            pooled_g.append(_stacked_rdf(frame_atoms, rmax, rdf_nbins))
             z_t, pos_t, box_t = tensors_from_atoms(frame_atoms, device)
-            pooled_U.append(_config_energy(model, z_t, pos_t, box_t, device))
+            if local_observable:
+                # _config_energy's return value is unused here (it's the
+                # whole-box total, not what this path wants) - it is still
+                # called for its SIDE EFFECT: triggering the identical,
+                # already-trusted forward-pass code path every other water-
+                # box script uses, which populates capture.captured as a
+                # consequence (local_molecule_observable.AtomicEnergyCapture's
+                # pre_reduce hook) - not a second, separately-trusted forward
+                # call.
+                _config_energy(model, z_t, pos_t, box_t, device)
+                local_U = local_molecule_energies(
+                    capture.captured, replica_group_ids_torch[replica_i], num_molecules_per_system,
+                )
+                local_g = per_molecule_mean_oh_bond_length(
+                    frame_atoms.get_atomic_numbers(), frame_atoms.get_positions(),
+                    np.array(frame_atoms.get_cell()).diagonal(), replica_group_ids_np[replica_i],
+                )
+                pooled_g.extend(local_g.tolist())
+                pooled_U.extend(local_U)
+                n_local_this_snapshot = num_molecules_per_system
+            else:
+                pooled_g.append(_stacked_rdf(frame_atoms, rmax, rdf_nbins))
+                pooled_U.append(_config_energy(model, z_t, pos_t, box_t, device))
+                n_local_this_snapshot = 1
             if log_mem:
                 allocated_gb = torch.cuda.memory_allocated(device) / 1e9
                 print(
-                    f"  [mem] iter 0, pooled_U sample {sample_i + 1}/{len(all_snapshots)}: "
-                    f"{allocated_gb:.2f} GB allocated"
+                    f"  [mem] iter 0, snapshot {sample_i + 1}/{len(all_snapshots)} "
+                    f"(+{n_local_this_snapshot} pooled sample(s)): {allocated_gb:.2f} GB allocated"
                 )
 
         if len(pooled_U) < 2:
@@ -505,6 +604,15 @@ if __name__ == "__main__":
     parser.add_argument("--save-every", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
+        "--local-observable", action="store_true",
+        help="Use the localized per-molecule Boltzmann estimator (Raja et al. 2025 Section 4.4's "
+        "actual water recipe: mean O-H bond length per molecule) instead of the default whole-box "
+        "RDF (paper/main.tex sec:q4-stable-local-estimator-scope). Default False preserves the "
+        "original behavior exactly, unchanged. With this on, max_pooled_samples caps snapshots "
+        "forwarded, not raw pooled samples - each forwarded snapshot yields up to "
+        "num_molecules_per_system (g, U) pairs instead of exactly 1.",
+    )
+    parser.add_argument(
         "--smoke-test", action="store_true",
         help="3 replicas, 3 outer iterations, short-but-not-tiny windows - confirm the whole loop "
         "runs end to end AND actually exercises a real gradient step (checkpoints save, loss "
@@ -525,7 +633,7 @@ if __name__ == "__main__":
             subsample_stride=2, temperature_k=args.temperature_k, friction_fs_inv=args.friction_fs_inv,
             dt_fs=args.dt, lambda_qm=args.lambda_qm, lr=args.lr, qm_batch_size=2,
             n_reference_configs=20, save_every=1, seed=args.seed,
-            max_pooled_samples=args.max_pooled_samples,
+            max_pooled_samples=args.max_pooled_samples, local_observable=args.local_observable,
         )
     else:
         fine_tune_stable(
@@ -535,5 +643,5 @@ if __name__ == "__main__":
             subsample_stride=args.subsample_stride, temperature_k=args.temperature_k,
             friction_fs_inv=args.friction_fs_inv, dt_fs=args.dt, lambda_qm=args.lambda_qm,
             lr=args.lr, qm_batch_size=args.qm_batch_size, save_every=args.save_every, seed=args.seed,
-            max_pooled_samples=args.max_pooled_samples,
+            max_pooled_samples=args.max_pooled_samples, local_observable=args.local_observable,
         )
