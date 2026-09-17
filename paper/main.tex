@@ -27,8 +27,8 @@
 
 \newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
 
-\title{Does Per-Molecule Momentum Conservation Improve Neural Network
-Potentials? \\ \large Working notes and results log}
+\title{Regularization and Dynamical Stability of Neural Network
+Potentials \\ \large Working notes and results log}
 \author{Dietrich Lachmann}
 \date{\today}
 
@@ -36,52 +36,323 @@ Potentials? \\ \large Working notes and results log}
 \maketitle
 
 \begin{abstract}
-This is a working document, not a finished paper. It tracks the motivation,
-methods, and results of an ongoing investigation into whether adding a
-physics-informed momentum-conservation loss term improves neural network
-interatomic potentials (NNIPs), and specifically whether that effect depends
-on the system being a single isolated molecule versus a periodic
-multi-molecule system where momentum conservation is not already guaranteed
-by architectural equivariance. On MD17 aspirin (single molecule), the
-constraint is confirmed architecturally redundant, motivating a move to a
-periodic liquid-water benchmark (Cheng et al. 2019, 64 molecules/box), where
-per-molecule momentum conservation is confirmed genuinely non-trivial.
-TensorNet's own periodic neighbor search is confirmed correctly
-periodicity-aware (Section~\ref{sec:periodicity}). The static-metric
-momentum-vs-absolute comparison that looked like a clean win at $n=3$ seeds
-does \emph{not} survive to $n=6$: it turns out to depend heavily on
-evaluation methodology and on one noisy checkpoint, and the only signal that
-holds up under every lens tried is a modest force-quality improvement
-(Section~\ref{sec:n6-update}). A first real-dynamics evaluation (NVE
-rollouts via ASE, Section~\ref{sec:rollout-results}) finds both conditions
-produce unstable dynamics from a realistic starting configuration --- a
-failure mode invisible to every static metric above --- with the momentum
-condition consistently running hotter, replicated across 10 independent
-trials on two different replicate axes. Digging into why (Section~\ref{sec:q3-progress}--\ref{sec:q3-seed5})
-found a systematic, statistically robust bias toward higher net per-molecule
-force in the specific momentum-trained checkpoint used for these rollouts
---- but that bias was already visible in that checkpoint's own static
-evaluation before any dynamics were run, and substantially (though not
-completely) weakens at a training seed whose static evaluation favored
-momentum instead. Seed-to-seed variation in whether the momentum loss
-achieves its intended effect, more than any fixed property of the method
-itself, is the best-supported explanation so far. Separately, both
-conditions turn out to be dynamically unstable regardless of the momentum
-question (Section~\ref{sec:q4}) --- a real short-range collapse mechanism
-contributes in some but not all trajectories, and the literature-motivated
-fix (an explicit ZBL repulsive prior) was tested directly and found to make
-stability substantially \emph{worse}, not better, replicated across two
-independent training seeds (Section~\ref{sec:q4-negative-result}) --- a
-negative result attributed to the prior's cutoff necessarily overlapping the
-O--H covalent bond length in this specific hydrogen-bonded system.
-Section~\ref{sec:results} reports everything in full; Section~\ref{sec:next}
-lists what's still open: whether the (now much weaker) static momentum
-effect is real at all, and whether the residual rollout-stability lean at a
-``good'' momentum seed is worth chasing further. \todo{replace this abstract
-once both have answers.}
+This research diary records TensorNet experiments on supervised molecular
+potentials, auxiliary force/torque regularization, short-range repulsive
+priors, and observable-based fine-tuning. Whole-system momentum penalties
+were numerically redundant on isolated aspirin. Subsequent periodic-water
+experiments applied a penalty to each molecule's net force and torque;
+these quantities can physically be nonzero because molecules exchange
+momentum with their surroundings, so this term is an empirical regularizer.
+Static accuracy and trajectory behavior gave different assessments of the
+models. After introducing same-molecule exclusions in ZBL and revising
+checkpoint selection, the regularized condition had lower mean rollout
+temperatures across two training seeds and two replicate designs, while
+substantial heating remained. StABlE-inspired fine-tuning with global RDF
+and local bond-length observables has shown no resolved improvement in the
+available short NVE comparisons on one base checkpoint.
+
+A dated review (17 September 2026, Section~\ref{sec:review-20260917}) adds
+the reproducibility specification and qualifies earlier interpretations.
+It identifies a mismatch between checkpoint training splits and rollout
+selection, use of evaluation configurations in fine-tuning calibration,
+and differences from the published StABlE sampling procedure. The recorded
+rollout behavior remains a diagnostic observation; claims about held-out
+generalization and the effectiveness of the published method require
+controlled follow-up. Earlier diary entries retain the reasoning available
+at the time and should be read with the dated corrections.
 \end{abstract}
 
 \tableofcontents
+
+\section{Dated review and reproducibility record: 17 September 2026}
+\label{sec:review-20260917}
+
+This section records a desk review of source code, saved configuration and
+history JSON files, and result CSVs at repository revision
+\texttt{02073d0}. No training or MD was rerun. Model checkpoint binaries and
+the remote environment are unavailable in this checkout. Statements below
+distinguish directly reconstructable settings from diary-reported settings
+and unresolved provenance. The companion
+\path{paper/review_evidence.py} reproduces the split-membership audit and
+paired temperature calculation; its dated JSON output records the evidence.
+Historical entries below preserve the experimental sequence. Their phrases
+``not yet run,'' ``resolved,'' and ``confirmed'' describe the knowledge at
+that stage and are subject to this review.
+
+\subsection{Problem statements and model families}
+
+The original question was whether additional physical constraints improve
+a supervised molecular potential. Aspirin established that the tested
+whole-system force/torque penalty supplied essentially no new signal.
+The water study then tested an auxiliary molecular force/torque penalty,
+and trajectory evaluation exposed rapid heating even when static prediction
+errors appeared acceptable. The current question is whether observable-based
+fine-tuning improves trajectory behavior while retaining energy/force
+accuracy. This distinction between the original hypothesis and the current
+stability question should guide an overview presentation.
+
+All completed comparisons use TensorNet. The variants are supervised
+absolute-energy training; that training with the molecular penalty; each
+with stock ZBL or same-molecule-exclusion ZBL; and fine-tuning of the
+extended-training, excluded-ZBL \texttt{water\_absolute} seed-1 checkpoint
+with global RDF or local mean O--H bond-length observables. MACE, NequIP,
+SchNet, and GemNet-T are literature comparators rather than additional
+architectures trained in this checkout. CHARMM36 residual learning was
+explored and suspended for computational cost. Saved aspirin results cover
+three seeds in each of two conditions; expanded aspirin, benzene, and
+ethanol matrices in the runner are planned scope rather than demonstrated
+completed studies.
+
+\paragraph{Correction to the conservation interpretation.}
+For a molecule embedded in a liquid,
+\begin{equation}
+\frac{d\mathbf P_m}{dt}=\sum_{i\in m}\mathbf F_i
+=\mathbf F_{\mathrm{environment}\to m},
+\end{equation}
+which can be nonzero. The auxiliary loss suppresses this net force and the
+net torque, including physically legitimate intermolecular effects. Its
+value should be called a molecular force/torque penalty; legacy result
+columns containing \texttt{momentum\_violation} retain their original
+names for traceability. A lower value alone is not evidence of greater
+physical correctness. For an isolated system, zero total force follows
+from translational invariance of a scalar energy with
+$\mathbf F_i=-\nabla_i E$; zero total torque follows from rotational
+invariance. Force equivariance alone does not establish these conservation
+identities. The net momentum itself need not be zero to be conserved.
+Periodic-cell rotational statements additionally require care about the
+cell and boundary geometry. The subsystem momentum balance follows the
+standard mechanics formulation \citep{momentum-review-source}.
+
+\subsection{Data, splits, units, and provenance}
+
+WaterBox contains 1593 configurations of 192 atoms (64 water molecules),
+with per-configuration periodic cells and revPBE0-D3 labels. The actual
+\path{src/waterbox_data.py} split shuffles indices with
+\texttt{random.Random(seed)} and assigns 1274 training, 159 validation,
+and 160 test configurations: nominally 80/10/10, with integer truncation
+for the first two partitions. Training and static evaluation in
+\path{src/run_waterbox_study.py} both receive the cell's seed. Thus
+conditions with the same seed share a split; different training seeds also
+change the split. Across-seed variability combines optimization and
+data-partition variability. The random split is motivated by mixed
+classical/path-integral data in the loader notes, but group stratification
+and independence of related configurations have not been established.
+
+MD17 uses contiguous 80/10/10 blocks via
+\path{src/data_splits.py}, with shuffled training minibatches. For dataset
+size $N$, counts are $\lfloor0.8N\rfloor$, $\lfloor0.1N\rfloor$, and
+the remainder. Exact loaded counts and any correlation gap should be
+recorded from the remote dataset. WaterBox conversion is explicit:
+$1\,a_0=0.529177210903$\,\AA,
+$1\,E_h=27.211386245988$\,eV, with forces multiplied by their ratio.
+Energies are full-box totals, and \texttt{remove\_ref\_energy=False}.
+The MD17 training paths have no analogous explicit unit conversion;
+the upstream loader inspected during this review copies raw energies and
+forces \citep{torchmdnet-review-source}. Earlier aspirin numbers labelled eV require checking against the
+installed loader and cached dataset before physical-unit comparisons.
+
+\paragraph{Confirmed rollout split mismatch.}
+\path{src/run_rollout_study.py} fixes \texttt{DATA\_SEED=42}, whereas
+the relevant pretrained checkpoints use split seeds 0 or 1. Reconstructing
+the index permutations for the documented 1593-entry ordering gives
+seed-42 test indices 0--5 as original dataset indices
+234, 1446, 23, 1133, 514, and 1083. All six belong to the training
+partition for both seed-0 and seed-1 checkpoints. Consequently those
+rollouts demonstrate behavior from training configurations. They are not
+held-out-start evaluations. Of the entire 160-entry seed-42 test partition,
+124 entries are seed-0 training configurations and 131 are seed-1 training
+configurations; only 18 and 17 respectively are in the corresponding
+original test partitions. The study runner's matched-seed static evaluation
+does not have this particular mismatch. Standalone evaluator calls default
+to seed 42, so their recorded comparisons require command-level verification.
+
+\paragraph{Fine-tuning partition and calibration leakage.}
+\path{src/train_waterbox_stable.py} reconstructs a split using its own
+seed (default 42) rather than recovering the pretrained split. Under that
+setting its supervised sampling pool includes 129 of the 160 original
+seed-1 test configurations; this is eligibility for sampling, not proof
+that every such configuration was actually drawn. Observable targets are
+sampled from the full dataset. The default 200-configuration target sample
+includes 16 seed-42 test entries and 23 original seed-1 test entries.
+Moreover, \texttt{compute\_reference\_floors} explicitly calibrates the
+rewind thresholds from the test partition: with a requested 200 references,
+all 160 test configurations are used. This makes that evaluation partition
+part of training calibration. Original run commands are incompletely
+archived, so actual nondefault seed overrides remain to be checked.
+Future confirmatory runs need a persistent split manifest, training-only
+reference targets and calibration, and a test set reserved across both
+pretraining and fine-tuning. Existing results remain exploratory.
+
+\subsection{Architecture and supervised optimization settings}
+
+Saved extended-water configurations specify TensorNet with six layers,
+embedding dimension 256, 64 fixed exponential-normal radial basis
+functions, SiLU activation, a 5.0\,\AA\ upper cutoff (lower cutoff zero),
+and neighbor limit 128. The output is a scalar energy summed over atoms;
+forces are obtained through energy derivatives. The symmetry setting is
+$O(3)$ and configured precision is 32-bit. Periodic cells are passed for
+each example. These settings identify one architecture under several
+training interventions; generic configuration keys such as attention-head
+count should not be assumed active TensorNet mechanisms.
+
+The initial learning rate is $10^{-4}$, weight decay zero, warmup zero,
+and scheduler parameters are patience 15, factor 0.8, minimum learning rate
+$10^{-7}$. Upstream \texttt{LNNP.configure\_optimizers} currently uses
+AdamW and ReduceLROnPlateau \citep{torchmdnet-review-source}; the exact installed version and scheduler
+monitor must be archived from the training host. The project overrides
+checkpoint selection but does not override that optimizer method. The
+upstream scheduler monitors a weighted validation loss, so the
+anneal-invariant checkpoint fix alone does not establish an
+anneal-invariant learning-rate schedule. The water trainer sets gradient
+clipping to 1000 and uses one device with four data-loader workers.
+
+The water control uses minibatches of 2 with accumulation over 16 batches;
+the regularized condition uses minibatches of 1 with accumulation over
+32 batches. Both nominal effective batch sizes are 32 configurations,
+except for a final partial accumulation. Aspirin uses batch size 32.
+Different microbatch sizes still warrant numerical comparison, particularly
+given the documented batch-size-sensitive checkpoint anomaly.
+
+The supervised objective is the full-configuration energy MSE plus the
+mean force-component MSE with coefficients $(w_E,w_F)=(0.05,0.95)$.
+The auxiliary penalty coefficient is 0 for the control and 0.01 for the
+regularized condition. In the annealed water runs the coefficients switch
+at zero-based epoch 30 to $(0.75,0.25)$. They multiply differently scaled,
+dimensionful errors, so they are not percentages of the actual loss or
+gradient contribution. Energy MSE is not divided by atom count. Likewise,
+the molecular penalty adds squared force and squared torque with implicit
+unit-dependent scaling; separate nondimensionalization or explicit scales
+would be needed for a portable physical interpretation.
+
+The initial study budget was 20 epochs; subsequent water matrices used
+50, and the extended runs set a maximum of 70. Early stopping in the
+water runner has patience 40. Best-checkpoint selection uses
+$0.05\,\mathrm{MSE}_E+0.95\,\mathrm{MSE}_F$ throughout; extended runs
+restrict eligible epochs to 50--69, while early stopping watches the
+unmasked score. A separate callback saves the last checkpoint. A maximum
+epoch budget should not be reported as the actual selected or completed
+epoch. Saved best-score matches occur at history labels 68 and 68 for
+seed 0 (control/regularized) and 63 and 66 for seed 1. The CSV
+\texttt{final\_epoch} is the last history row, not the selected epoch.
+The history callback may contain previously logged metrics; exact
+checkpoint epoch metadata must resolve possible label offsets. Earlier
+claims of identical selected epochs across seeds are unsupported.
+
+Stock ZBL and MolecularZBL use a separate 2.0\,\AA\ cutoff and neighbor
+limit 128, with distance scale $10^{-10}$\,m/\AA\ and energy scale
+$1.602176634\times10^{-19}$\,J/eV. MolecularZBL excludes pairs assigned
+to the same water molecule using inferred fixed topology. This changes
+the prior and requires retraining; it is not solely an evaluation option.
+
+\subsection{Fine-tuning and rollout specification}
+
+The latest local-observable diary recipe is the extended-water control
+checkpoint at seed 1, eight replicas, 20 outer iterations, Adam learning
+rate $3\times10^{-6}$, and $\lambda_{QM}=1$. Each sampling phase requests
+10,000 integration steps per replica at 0.1\,fs and 300\,K, with Langevin
+friction $0.01\,\mathrm{fs}^{-1}$, checks every 100 steps, and subsampling
+stride 2. The local run caps forwarded snapshots at 8 and obtains roughly
+511--512 molecular entries per update. This is a raw entry count.
+Reference sampling defaults to 200 configurations, the floor percentile
+to 1, and the supervised regularizer batch to 8 configurations. The
+regularizer reads energy/force weights from the loaded checkpoint;
+the initial weights in \texttt{config.json} alone do not prove the
+effective fine-tuning weights after annealing. These need logging from
+the loaded model.
+
+Global mode uses concatenated O--O, O--H, and H--H RDFs with 200 bins
+per pair type and a nominal 6\,\AA\ radius reduced as needed to fit the
+minimum-image box limit. Local mode matches the ensemble mean molecular
+O--H bond length and pairs it with summed GNN atomic energy contributions.
+The snapshot cap also changed from the earlier global recipe, so the
+global/local comparison is not an isolated observable-only intervention.
+Fine-tuning histories omit a complete run configuration; checkpoint writes
+retain model hyperparameters but omit optimizer/RNG/replica state and
+the full fine-tuning recipe. The settings above combine source defaults
+with diary reports and should be promoted to a saved run manifest.
+
+NVE evaluation uses ASE VelocityVerlet, Maxwell--Boltzmann initial
+velocities at nominal 300\,K, and removal of center-of-mass motion.
+Actual initial temperature fluctuates with the draw. Standard comparisons
+span 1\,ps: early runs used 2000 steps at 0.5\,fs, while the later ZBL
+comparisons use 10,000 steps at 0.1\,fs. Velocities use explicit seeds
+0--4 at fixed start index 0; the configuration axis uses start indices
+1--5 at fixed velocity seed 0. States are logged every 10 steps, and
+``plateau temperature'' is the mean over the last 30\% of logged frames.
+Within-run temperature fluctuations and between-replicate standard
+deviations are separate quantities. Energy drift is endpoint
+$\Delta E/N$ in meV/atom over the stated duration, rather than a fitted
+drift rate. The fractional drift based on the large absolute starting
+energy depends on the energy reference and should not be the primary
+conservation measure. Heating can accompany conserved total energy as
+potential energy becomes kinetic energy; it does not by itself identify
+an integration error.
+
+\subsection{Interpretation and outstanding rigor checks}
+
+The current molecular metric is also mislabeled in the saved summaries:
+\path{src/evaluate_waterbox.py} first averages the penalty over molecules
+within each configuration, then reports a mean and maximum across those
+configuration-level values. The ``max per molecule'' column is therefore
+the maximum configuration-average penalty, not the worst individual
+molecule. Its torque calculation centers raw coordinates without explicit
+minimum-image molecular unwrapping. Correct grouping across boundaries
+does not by itself validate this torque; invariance under equivalent
+periodic representations needs a separate check.
+
+The implemented fine-tuning loop is a StABlE-inspired adaptation.
+Published StABlE uses instability-triggered simulation/learning phases and
+repeated updates from the same near-unstable starting states
+\citep{raja2025stable}. This implementation makes one update after each
+fixed sampling phase, keeps evolving replica states across updates, and
+collects snapshots that pass the distance criterion. Its null result does
+not establish failure of the published algorithm. Fresh sampling under
+current parameters does not establish equilibrium, independence, or the
+correct weighting of the accepted configurations. Molecules in the same
+box and nearby trajectory snapshots are correlated. Increasing the raw
+pool from a few global samples to roughly 512 molecular entries does not
+establish a corresponding increase in effective sample size or rule out
+sampling error. Equilibrium and local-estimator assumptions, correlation
+times, and reference temperature/density/quantum-nuclear ensemble matching
+remain to be validated. The fixed ZBL term has zero parameter derivative,
+but its intermolecular interactions still affect the sampled ensemble;
+same-molecule exclusion does not make its contribution to a molecule's
+environment physically vanish.
+
+Recomputed from the latest local-run raw CSV, the five paired temperature
+differences (after minus before) average $+3.57$\,K. A conventional paired
+$t$ interval is approximately $[-42.17,49.30]$\,K at 95\% confidence,
+conditional on independent velocity draws, the fixed checkpoint and
+starting geometry, and approximately normal differences. With five pairs
+this is an imprecise diagnostic. It supports ``no resolved improvement
+in this comparison,'' rather than equivalence or proof of zero effect.
+The reported static change $2.451\to4.928$\,eV requires matching evaluation
+indices before it can establish an energy-accuracy regression.
+
+Other historical significance claims require the correct experimental
+unit: many molecule pairs within a configuration are clustered; repeated
+training iterations are serially dependent; repeated velocity draws are
+conditional on the same trained model and start. Use configuration-level
+or hierarchical uncertainty estimates, with independent training runs for
+method-level conclusions. Six configurations' force-error/heating
+correlations are exploratory associations. Selecting an improving replica
+after inspecting eight replicas adds a multiple-comparison issue.
+Consistent signs alone do not establish causality, and mixed signs alone
+do not prove an absent effect. Claims that a larger raw sample pool
+``rules out'' noise or that one global/local comparison isolates the
+observable's causal effect are stronger than the available evidence.
+
+Before confirmatory comparisons, preserve dataset hashes and split indices,
+separate split/initialization/sampler/velocity seeds, and record exact
+package versions, hardware, commands, checkpoint hashes and selected
+epochs, loss normalization, calibration inputs, and failure criteria.
+Compare both pretrained and fine-tuned models on the same untouched
+configurations. Add a supervised-only fine-tuning control at matched
+optimization budget to separate observable effects from additional
+training. Longer trajectories and multiple independently trained models
+are required before claims about useful simulation lifetimes. Audit
+reference citations against matching datasets, units, ensemble, and
+architecture before presenting numerical literature comparisons.
 
 \section{Motivation}
 \label{sec:motivation}
@@ -95,23 +366,20 @@ a conservation law (here: momentum conservation) as an auxiliary loss term
 improves the model beyond what supervised training on energies/forces alone
 achieves.
 
-The naive version of this question turns out to be uninteresting for a
-single isolated molecule: an $O(3)$-equivariant architecture already
-guarantees that the \emph{net} force on the whole molecule is (numerically)
-zero, for any input, before any training pressure is applied to it at all.
-We confirmed this empirically before investing further effort in it (see
-Section~\ref{sec:aspirin}) rather than assuming it from the equivariance
-argument alone.
+For the isolated molecule, forces derived from a translationally and
+rotationally invariant scalar energy satisfy the whole-system net-force
+and net-torque identities, up to numerical error. The aspirin experiment
+found the corresponding penalty essentially redundant
+(Section~\ref{sec:aspirin}).
 
-The more interesting version of the question is whether momentum
-conservation checked \emph{per individual molecule within a periodic,
-multi-molecule system} is similarly redundant, or whether it is a genuine,
-non-trivial constraint the architecture does not already enforce. Physically,
-there is no reason to expect it to be redundant: while the whole periodic
-box's net momentum is guaranteed zero by the same equivariance argument, an
-individual water molecule being pushed on by its hydrogen-bonded neighbors
-has no such guarantee. This is the premise of the water-box study
-(Section~\ref{sec:waterbox}).
+The water-box study applied the same penalty separately to each molecule.
+The original motivation described this as per-molecule momentum
+conservation. The 17 September review corrects that interpretation:
+intermolecular forces legitimately change each molecule's momentum, and
+the penalty is an empirical restriction on those forces and torques.
+The experimental question is whether this restriction improves accuracy
+or trajectory behavior, and what bias it introduces
+(Section~\ref{sec:review-20260917}).
 
 \section{Background}
 \label{sec:background}
@@ -124,7 +392,8 @@ datasets are in use:
 
 \begin{itemize}
   \item \textbf{MD17} \cite{md17} --- single-molecule ab initio MD
-  trajectories (aspirin, benzene, ethanol used so far). Native frame spacing
+  trajectories (completed ablation results cover aspirin; benzene and
+  ethanol are configured extensions). Native frame spacing
   is 0.5\,fs \cite{md17}, not 0.1\,fs as an earlier version of this codebase
   assumed --- see the implementation notes in Appendix~\ref{app:impl}.
   \item \textbf{WaterBox} \cite{cheng2019water} --- 1593 periodic liquid-water
@@ -277,6 +546,10 @@ revisited without vectorizing that code path first.
 \subsection{Water-box study}
 \label{sec:waterbox}
 
+This entry describes the initial design. The 50- and 70-epoch extensions,
+actual split counts, and current interpretation of the molecular penalty
+are consolidated in Section~\ref{sec:review-20260917}.
+
 Two conditions (\texttt{water\_absolute}, \texttt{water\_absolute+momentum},
 momentum weight 0.01), 3 seeds each, 20 epochs, same architecture and
 optimizer settings as the aspirin study \emph{except} batch size and
@@ -284,10 +557,11 @@ gradient-accumulation, which were re-derived specifically for this system
 (see Appendix~\ref{app:impl} --- the aspirin batch size does not fit a
 192-atom periodic system with TensorNet's per-edge tensor representation).
 
-The evaluation metrics are: energy MAE and force MAE against DFT ground
-truth (standard NNIP accuracy metrics), and mean/max per-molecule momentum
-violation on held-out configurations (the metric this study actually cares
-about --- see Section~\ref{sec:motivation}).
+The evaluation metrics are energy MAE and force MAE against DFT ground
+truth, and the mean/maximum configuration-average molecular force/torque
+penalty. Legacy result files name the latter quantities momentum violations.
+See Section~\ref{sec:review-20260917} for their exact aggregation and for
+the conditions required to call an evaluation configuration held out.
 
 \subsection{Energy/force loss-weight annealing}
 \label{sec:anneal}
@@ -487,6 +761,11 @@ point-wise --- see Section~\ref{sec:q3-progress}).
 
 \section{Results so far}
 \label{sec:results}
+
+These entries preserve successive historical interpretations. The dated
+review in Section~\ref{sec:review-20260917} supersedes claims about
+per-molecule conservation, held-out rollout starts, and unqualified
+statistical significance without changing the archived measurements.
 
 \subsection{Aspirin: whole-molecule momentum is redundant}
 
@@ -3323,6 +3602,13 @@ outcome is attributable to the observable switch, not a confound with
 simultaneously re-tuning the learning rate again from scratch.
 
 \subsubsection{First real local-observable run: safe, but a genuinely mixed result}
+\noindent\textbf{Retrospective qualification (17 September 2026).}
+The numerical observations below are retained as diary entries. The split
+audit, changed snapshot cap, sample dependence, and paired interval in
+Section~\ref{sec:review-20260917} limit the causal and significance claims
+made at the time. In particular, the static before/after comparison needs
+matched evaluation indices, and 512 molecular entries are not 512
+demonstrated independent samples.
 \label{sec:q4-stable-local-v1}
 
 \texttt{max\_pooled\_samples=8} performed exactly as extrapolated ---
@@ -3533,8 +3819,9 @@ mechanism: seed 0's velocity-axis \texttt{epot} gap is 34.2\,eV
 roughly 3$\times$ and 2$\times$ seed 1's 11.6/9.96\,eV respectively ---
 cleanly explaining why seed 0 runs so much hotter overall, and confirming
 this isn't a residual checkpoint-selection artifact: seed 0's selected
-epoch (68, identical to seed 1) already passed the same eligibility and
-batch-of-1 safety checks. Seed 0 simply converged to a checkpoint with a
+history label (68) is within the eligible window. The saved seed-1
+histories associate the best scores with different labels (63 and 66);
+exact checkpoint epoch metadata remains to be checked. Seed 0 reached a checkpoint with a
 genuinely larger force/energy residual near its own training-distribution
 configurations than seed 1 did, despite statistically indistinguishable
 aggregate test MAE between the two seeds (2.5--3.6\,eV vs.\ 2.2--2.5\,eV) ---
@@ -3652,6 +3939,20 @@ S.~Doerr, P.~Th{\"o}lke, T.~E.~Markland, and G.~De Fabritiis.
 simulations.
 \newblock \emph{Journal of Chemical Theory and Computation},
 20(10):4076--4087, 2024.
+
+\bibitem{momentum-review-source}
+TU Delft.
+\newblock Momentum, in Introduction to particle and continuum physics.
+\newblock \url{https://interactivetextbooks.tudelft.nl/nb1140/content/momentum.html},
+accessed 17 September 2026.
+
+\bibitem{torchmdnet-review-source}
+TorchMD-Net contributors.
+\newblock Upstream source: training module and MD17 dataset loader.
+\newblock \url{https://github.com/torchmd/torchmd-net/blob/main/torchmdnet/module.py}
+and \url{https://github.com/torchmd/torchmd-net/blob/main/torchmdnet/datasets/md17.py},
+accessed 17 September 2026. The installed training-host revision remains
+to be recorded.
 
 \bibitem{mace}
 I.~Batatia, D.~P.~Kov{\'a}cs, G.~N.~C.~Simm, C.~Ortner, and G.~Cs{\'a}nyi.

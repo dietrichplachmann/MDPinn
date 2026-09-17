@@ -1,0 +1,171 @@
+{
+  "review_date": "2026-09-17",
+  "assumptions": "1593 configurations, unchanged dataset ordering, documented/default seed 42 for fine-tuning and rollout selection; original run commands are not fully archived",
+  "split_source_sha256": "8f3bbf78556769038889af684c47bf2f516cdd121248c20c0439304bbab8b843",
+  "split_sizes": [
+    1274,
+    159,
+    160
+  ],
+  "seed42_rollout_dataset_indices": [
+    234,
+    1446,
+    23,
+    1133,
+    514,
+    1083
+  ],
+  "seed42_reference_target_overlap_seed42_test": 16,
+  "by_training_seed": {
+    "0": {
+      "rollout_start_membership": [
+        "train",
+        "train",
+        "train",
+        "train",
+        "train",
+        "train"
+      ],
+      "seed42_test_overlap_original_train_val_test": [
+        124,
+        18,
+        18
+      ],
+      "seed42_training_pool_overlap_original_test": 131,
+      "reference_target_overlap_original_test": 26
+    },
+    "1": {
+      "rollout_start_membership": [
+        "train",
+        "train",
+        "train",
+        "train",
+        "train",
+        "train"
+      ],
+      "seed42_test_overlap_original_train_val_test": [
+        131,
+        12,
+        17
+      ],
+      "seed42_training_pool_overlap_original_test": 129,
+      "reference_target_overlap_original_test": 23
+    },
+    "2": {
+      "rollout_start_membership": [
+        "train",
+        "test",
+        "train",
+        "train",
+        "train",
+        "train"
+      ],
+      "seed42_test_overlap_original_train_val_test": [
+        135,
+        16,
+        9
+      ],
+      "seed42_training_pool_overlap_original_test": 126,
+      "reference_target_overlap_original_test": 19
+    },
+    "3": {
+      "rollout_start_membership": [
+        "train",
+        "train",
+        "validation",
+        "train",
+        "validation",
+        "train"
+      ],
+      "seed42_test_overlap_original_train_val_test": [
+        134,
+        12,
+        14
+      ],
+      "seed42_training_pool_overlap_original_test": 132,
+      "reference_target_overlap_original_test": 16
+    },
+    "4": {
+      "rollout_start_membership": [
+        "validation",
+        "validation",
+        "train",
+        "train",
+        "train",
+        "validation"
+      ],
+      "seed42_test_overlap_original_train_val_test": [
+        129,
+        19,
+        12
+      ],
+      "seed42_training_pool_overlap_original_test": 124,
+      "reference_target_overlap_original_test": 17
+    },
+    "5": {
+      "rollout_start_membership": [
+        "train",
+        "train",
+        "validation",
+        "train",
+        "train",
+        "train"
+      ],
+      "seed42_test_overlap_original_train_val_test": [
+        134,
+        11,
+        15
+      ],
+      "seed42_training_pool_overlap_original_test": 133,
+      "reference_target_overlap_original_test": 15
+    }
+  },
+  "extended_checkpoint_history": {
+    "checkpoints\\waterbox_study_zbl_bonded_ext70\\water_absolute\\seed0": {
+      "history_epoch_labels_matching_saved_best_score": [
+        68.0
+      ],
+      "last_history_epoch_label": 68.0,
+      "caution": "History callback ordering can affect epoch labels; verify actual epoch from remote checkpoint metadata."
+    },
+    "checkpoints\\waterbox_study_zbl_bonded_ext70\\water_absolute\\seed1": {
+      "history_epoch_labels_matching_saved_best_score": [
+        63.0
+      ],
+      "last_history_epoch_label": 64.0,
+      "caution": "History callback ordering can affect epoch labels; verify actual epoch from remote checkpoint metadata."
+    },
+    "checkpoints\\waterbox_study_zbl_bonded_ext70\\water_absolute+momentum\\seed0": {
+      "history_epoch_labels_matching_saved_best_score": [
+        68.0
+      ],
+      "last_history_epoch_label": 68.0,
+      "caution": "History callback ordering can affect epoch labels; verify actual epoch from remote checkpoint metadata."
+    },
+    "checkpoints\\waterbox_study_zbl_bonded_ext70\\water_absolute+momentum\\seed1": {
+      "history_epoch_labels_matching_saved_best_score": [
+        66.0
+      ],
+      "last_history_epoch_label": 68.0,
+      "caution": "History callback ordering can affect epoch labels; verify actual epoch from remote checkpoint metadata."
+    }
+  },
+  "local_finetune_paired_temperature": {
+    "source": "results\\waterbox_rollout_stable_compare\\water_absolute_seed1_local_v1\\raw_results.csv",
+    "source_sha256": "49592db036ba5b23292e0e4e2b30ee6aff1802c073501a1b3347e2f63d259266",
+    "n": 5,
+    "after_minus_before_k": [
+      43.189528403573604,
+      33.09528086164903,
+      -46.24111895946794,
+      6.46048097268374,
+      -18.67665770502697
+    ],
+    "mean_difference_k": 3.5655027146822933,
+    "approximate_95_percent_paired_t_interval_k": [
+      -42.165276362230074,
+      49.296281791594666
+    ],
+    "assumptions": "Independent velocity draws conditional on one fixed checkpoint and geometry; normal paired differences; n=5; no inference across training seeds."
+  }
+}
