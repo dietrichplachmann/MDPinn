@@ -1291,8 +1291,61 @@ The RDF side of the diagnostic hasn't been analyzed in the same depth as the
 energy/temperature numbers yet --- worth revisiting windowed by time
 (early/transient vs.\ plateau region) rather than over a whole trajectory
 that spends most of its length in an already-overheated, non-representative
-state. \todo{diffusion coefficient / other dynamical observables - read more
-before committing to a list here.}
+state. The implemented follow-up, \texttt{src/postprocess\_rdfs.py}, therefore
+recomputes the saved trajectories over 0--100, 100--300, and 700--1000\,fs
+windows and reports integrated RDF error, peak and minimum locations and
+heights, and O--O coordination number. This analysis has not yet been run on
+the remote ASE environment.
+
+\subsubsection{Planned equilibrium-property extension: NVT and NPT}
+\label{sec:waterbox-property-extension}
+
+The NVE experiment and the equilibrium-property experiment answer different
+questions and remain separate. NVE exposes energy drift and spontaneous
+potential-to-kinetic conversion without external feedback. NVT controls
+temperature for structural and transport observables. NPT additionally
+allows the model to select an equilibrium volume and density. Consequently,
+survival under a thermostat or barostat is not counted as NVE stability: the
+coupling algorithms can remove heat or change the cell in response to a bad
+potential.
+
+The newly implemented \texttt{src/run\_waterbox\_ensemble.py} provides
+Nose--Hoover-chain NVT and isotropic Martyna--Tobias--Klein NPT with explicit
+equilibration and production phases. It records temperature, energy, volume,
+density, and (for NPT) pressure, saves production coordinates, and writes a
+manifest containing the checkpoint, data-split seed, starting configuration,
+velocity seed, timestep, coupling constants, requested duration, and
+completion state. \texttt{src/run\_waterbox\_property\_study.py} applies the
+same protocol to both loss conditions and all six trained seeds. Starting
+configurations use each model's own split seed, addressing the audit finding
+that the earlier globally seed-42 starts were not held out for every trained
+model. Velocity replicates are averaged within a trained seed before paired
+condition comparisons; they are not treated as independent trained models.
+
+NPT requires stress, which the original ASE adapter did not provide.
+\texttt{TensorNetCalculator} now computes the six-component ASE stress as the
+energy derivative with respect to homogeneous strain at fixed fractional
+coordinates. This code path is entered only when stress is requested, leaving
+the established NVE energy/force path unchanged. Before NPT,
+\texttt{src/verify\_waterbox\_stress.py} must show agreement with central
+finite-strain energy differences for all six components and across a strain
+step-size sweep. That check establishes implementation consistency, not
+physical pressure accuracy: the 1593-configuration WaterBox training set used
+here supplies energies and forces but no stress labels. Equilibrium density is
+therefore a stringent out-of-training-target validation.
+
+The first production target is 300\,K and 1\,bar, followed only after pilot
+validation by a 250--315\,K density isobar comparable in intent to published
+MACE water tests \citep{mace}. Fixed-density NVT production will supply
+O--O/O--H/H--H RDFs, coordination and local-geometry statistics. A diffusion
+coefficient will be added only for sufficiently long trajectories, using
+unwrapped oxygen or molecular-centre coordinates, multiple time origins,
+centre-of-mass removal, a declared linear MSD fit interval, replicate
+uncertainty, and an assessment of finite-size bias in the 64-molecule box.
+The existing 1\,ps heated trajectories cannot support a literature-comparable
+diffusion coefficient. A timestep-convergence gate is also required before
+long production because the bonded-ZBL experiments already established that
+0.5\,fs can be invalid even when 0.1\,fs conserves energy.
 
 \subsection{Q4 (new, now the top priority): why are BOTH conditions
 dynamically unstable at all?}

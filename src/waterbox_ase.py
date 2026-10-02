@@ -61,6 +61,25 @@ def tensors_from_atoms(atoms, device):
     return z, pos, box
 
 
+def _strain_matrix_from_voigt(strain_voigt, *, dtype, device):
+    """Return a symmetric 3x3 strain tensor from ASE Voigt ordering.
+
+    ``strain_voigt`` is ordered xx, yy, zz, yz, xz, xy.  The shear entries
+    are engineering strains, so each symmetric off-diagonal tensor entry is
+    half the corresponding Voigt value.  With this convention, differentiating
+    energy with respect to ``strain_voigt`` returns ASE's stress convention in
+    the same ordering.
+    """
+    strain = torch.zeros((3, 3), dtype=dtype, device=device)
+    strain[0, 0] = strain_voigt[0]
+    strain[1, 1] = strain_voigt[1]
+    strain[2, 2] = strain_voigt[2]
+    strain[1, 2] = strain[2, 1] = 0.5 * strain_voigt[3]
+    strain[0, 2] = strain[2, 0] = 0.5 * strain_voigt[4]
+    strain[0, 1] = strain[1, 0] = 0.5 * strain_voigt[5]
+    return strain
+
+
 class TensorNetCalculator(Calculator):
     """Wraps a trained WaterLNNP/LNNP checkpoint as an ASE Calculator.
 
@@ -71,7 +90,7 @@ class TensorNetCalculator(Calculator):
     separately-trusted one.
     """
 
-    implemented_properties = ["energy", "forces"]
+    implemented_properties = ["energy", "forces", "stress"]
 
     def __init__(self, checkpoint_path=None, model=None, device=None, **kwargs):
         """Pass exactly one of checkpoint_path (loads a fresh model from
@@ -102,8 +121,57 @@ class TensorNetCalculator(Calculator):
         pos = pos.clone().detach().requires_grad_(True)
         batch = torch.zeros(len(z), dtype=torch.long, device=self.device)
 
+        need_stress = properties is not None and "stress" in properties
+        strain_voigt = None
+        if need_stress:
+            if box is None:
+                raise ValueError("Stress requires a periodic simulation cell.")
+            strain_voigt = torch.zeros(6, dtype=pos.dtype, device=self.device, requires_grad=True)
+            strain = _strain_matrix_from_voigt(strain_voigt, dtype=pos.dtype, device=self.device)
+            deformation_t = torch.eye(3, dtype=pos.dtype, device=self.device) + strain.T
+            # Positions are row vectors and box rows are lattice vectors.  A
+            # homogeneous real-space deformation therefore right-multiplies
+            # both by F^T, keeping fractional coordinates fixed.
+            model_pos = pos @ deformation_t
+            model_box = box @ deformation_t
+        else:
+            model_pos = pos
+            model_box = box
+
         with torch.enable_grad():
+            # Preserve the established force-producing inference path.  In
+            # eval mode TorchMD-Net's internal autograd.grad frees the energy
+            # graph after forming forces, so stress cannot safely be taken
+            # from that same forward pass.
             energy, forces = self.model(z, pos, batch=batch, box=box)
+
+            if need_stress:
+                # Perform a second, energy-only pass for the strain derivative.
+                # LNNP owns the actual TorchMD_Net as `.model`; toggling only
+                # its derivative flag avoids train-mode behavior while keeping
+                # the graph required for dE/d(strain).  NPT therefore costs one
+                # additional energy forward per step.
+                derivative_model = getattr(self.model, "model", None)
+                if derivative_model is None or not hasattr(derivative_model, "derivative"):
+                    raise RuntimeError(
+                        "Cannot locate TorchMD-Net derivative flag for stress evaluation."
+                    )
+                original_derivative = derivative_model.derivative
+                try:
+                    derivative_model.derivative = False
+                    stress_energy, _ = self.model(
+                        z, model_pos, batch=batch, box=model_box
+                    )
+                finally:
+                    derivative_model.derivative = original_derivative
+                strain_gradient = torch.autograd.grad(
+                    stress_energy.sum(), strain_voigt, retain_graph=False, create_graph=False,
+                    allow_unused=False,
+                )[0]
+                volume = float(atoms.get_volume())
+                if not np.isfinite(volume) or volume <= 0:
+                    raise ValueError(f"Stress requires a finite positive cell volume, got {volume}.")
+                self.results["stress"] = (strain_gradient / volume).detach().cpu().numpy()
 
         self.results["energy"] = float(energy.detach().squeeze().item())
         self.results["forces"] = forces.detach().cpu().numpy()
