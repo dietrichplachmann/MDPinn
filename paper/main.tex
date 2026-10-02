@@ -1366,6 +1366,24 @@ invariance. No NPT trajectory is permitted until that gate passes for both
 loss conditions. Even a pass does not validate the predicted pressure against
 DFT because stress was absent from training.
 
+Both seed-0 checkpoints passed this hydrostatic implementation gate. For the
+absolute-loss checkpoint, the calculator trace at strain 0.003 was
+$-0.040631$\,eV/\AA$^3$, compared with $-0.041008$\,eV/\AA$^3$ from the
+independent construction at the same strain and $-0.040757$\,eV/\AA$^3$ at
+strain 0.01. Its potential-only pressure is $+0.013544$\,eV/\AA$^3$, or
+approximately $+21{,}699$\,bar. For the momentum-loss checkpoint, the three
+traces were respectively $+0.013837$, $+0.013711$, and
+$+0.013020$\,eV/\AA$^3$, giving a potential-only pressure of
+$-0.004612$\,eV/\AA$^3$, approximately $-7{,}390$\,bar. These values exclude
+the kinetic stress contribution. Thus, the pressure implementation is
+internally consistent for both checkpoints, while the magnitudes are
+physically concerning for a nominal 1-bar starting state and predict opposite
+initial volume responses: expansion for the absolute model and compression
+for the momentum model. The loss choice has therefore changed the learned
+volume derivative qualitatively even though stress was not a training target.
+This distinction between implementation verification and physical pressure
+accuracy is retained when interpreting the NPT pilot.
+
 The first production target is 300\,K and 1\,bar, followed only after pilot
 validation by a 250--315\,K density isobar comparable in intent to published
 MACE water tests \citep{mace}. Fixed-density NVT production will supply
