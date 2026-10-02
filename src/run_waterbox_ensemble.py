@@ -103,6 +103,7 @@ def run_ensemble(
     log_interval_steps: int = 10, trajectory_interval_steps: int = 100,
     maximum_temperature_k: float = 5000.0, minimum_density_g_cm3: float = 0.2,
     maximum_density_g_cm3: float = 2.0,
+    stress_fd_epsilon: float = 0.003,
 ) -> dict:
     if ensemble not in {"nvt", "npt"}:
         raise ValueError(f"ensemble must be 'nvt' or 'npt', got {ensemble!r}")
@@ -124,7 +125,11 @@ def run_ensemble(
     if not 0 <= test_config_index < len(test_data):
         raise IndexError(f"test_config_index={test_config_index} outside 0..{len(test_data) - 1}")
     atoms = atoms_from_waterbox_sample(test_data[test_config_index])
-    atoms.calc = TensorNetCalculator(checkpoint)
+    atoms.calc = TensorNetCalculator(
+        checkpoint,
+        stress_mode="hydrostatic_fd" if ensemble == "npt" else "analytic",
+        stress_fd_epsilon=stress_fd_epsilon,
+    )
     MaxwellBoltzmannDistribution(
         atoms, temperature_K=temperature_k, rng=np.random.RandomState(velocity_seed)
     )
@@ -219,6 +224,8 @@ def run_ensemble(
             "production_ps_requested": production_ps,
             "tdamp_fs": tdamp_fs,
             "pdamp_fs": pdamp_fs if ensemble == "npt" else None,
+            "stress_mode": "hydrostatic_fd" if ensemble == "npt" else None,
+            "stress_fd_epsilon": stress_fd_epsilon if ensemble == "npt" else None,
             "log_interval_steps": log_interval_steps,
             "trajectory_interval_steps": trajectory_interval_steps,
             "steps_completed": dynamics.nsteps,
@@ -256,6 +263,7 @@ def main() -> None:
     parser.add_argument("--production-ps", type=float, default=100.0)
     parser.add_argument("--tdamp-fs", type=float, default=100.0)
     parser.add_argument("--pdamp-fs", type=float, default=1000.0)
+    parser.add_argument("--stress-fd-epsilon", type=float, default=0.003)
     parser.add_argument("--log-interval-steps", type=int, default=10)
     parser.add_argument("--trajectory-interval-steps", type=int, default=100)
     parser.add_argument("--maximum-temperature-k", type=float, default=5000.0)
@@ -274,6 +282,7 @@ def main() -> None:
         maximum_temperature_k=args.maximum_temperature_k,
         minimum_density_g_cm3=args.minimum_density_g_cm3,
         maximum_density_g_cm3=args.maximum_density_g_cm3,
+        stress_fd_epsilon=args.stress_fd_epsilon,
     )
 
 

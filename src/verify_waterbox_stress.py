@@ -1,9 +1,12 @@
 #!/usr/bin/env python
-"""Verify TensorNetCalculator stress against finite cell-strain energies.
+"""Diagnose analytic stress and gate hydrostatic finite-difference pressure.
 
 This is a mandatory remote-GPU gate before any NPT trajectory is trusted.
-The learned WaterBox checkpoints were trained on energies and forces, not
-stress labels, so this script verifies implementation consistency only; it
+The analytic box-gradient path is retained here as a diagnostic because it
+fails for these checkpoints.  Isotropic NPT instead uses a separately gated
+central finite-difference estimate of the hydrostatic stress trace.  The
+learned WaterBox checkpoints were trained on energies and forces, not stress
+labels, so passing this script verifies implementation consistency only; it
 does not establish that the predicted pressure is physically accurate.
 
 Example:
@@ -22,6 +25,7 @@ from waterbox_data import load_waterbox_dataset, random_split
 
 
 VOIGT_LABELS = ("xx", "yy", "zz", "yz", "xz", "xy")
+EV_A3_TO_BAR = 1.602176634e6
 
 
 def deformation_from_voigt(component: int, amount: float) -> np.ndarray:
@@ -133,6 +137,72 @@ def evaluate_coordinate_mode(
     return component_passed, hydrostatic_passed
 
 
+def verify_hydrostatic_fallback(
+    atoms, checkpoint: str, calculator_epsilon: float, reference_epsilon: float,
+    rtol: float, atol_ev_a3: float,
+) -> bool:
+    """Gate the exact stress path used by IsotropicMTKNPT.
+
+    The independent reference uses the existing strained-Atoms helper rather
+    than TensorNetCalculator's internal tensor scaling.  Agreement therefore
+    checks calculator wiring, sign, normalization, wrapping, Voigt projection,
+    and convergence between the production and larger reference strain.
+    """
+    wrapped = atoms.copy()
+    wrapped.wrap()
+    wrapped.calc = TensorNetCalculator(
+        checkpoint,
+        stress_mode="hydrostatic_fd",
+        stress_fd_epsilon=calculator_epsilon,
+    )
+    fallback = np.asarray(wrapped.get_stress(voigt=True), dtype=float)
+    fallback_trace = float(fallback[:3].sum())
+    reference_at_calculator_epsilon = finite_difference_stress_trace(
+        wrapped, checkpoint, calculator_epsilon
+    )
+    reference_at_larger_epsilon = finite_difference_stress_trace(
+        wrapped, checkpoint, reference_epsilon
+    )
+
+    expected_projection = np.asarray(
+        [fallback_trace / 3.0] * 3 + [0.0, 0.0, 0.0]
+    )
+    projection_pass = bool(np.allclose(fallback, expected_projection, rtol=0.0, atol=1e-12))
+    trace_tolerance = 3.0 * atol_ev_a3 + rtol * abs(reference_at_larger_epsilon)
+    wiring_pass = abs(fallback_trace - reference_at_calculator_epsilon) <= trace_tolerance
+    convergence_pass = abs(fallback_trace - reference_at_larger_epsilon) <= trace_tolerance
+
+    raw_reference = finite_difference_stress_trace(atoms, checkpoint, reference_epsilon)
+    image_pass = abs(raw_reference - reference_at_larger_epsilon) <= trace_tolerance
+    passed = projection_pass and wiring_pass and convergence_pass and image_pass
+
+    print("\n=== hydrostatic finite-difference NPT gate ===")
+    print(f"calculator strain epsilon: {calculator_epsilon:g}")
+    print(f"reference strain epsilon: {reference_epsilon:g}")
+    print("Returned isotropic stress (eV/A^3):")
+    for label, value in zip(VOIGT_LABELS, fallback):
+        print(f"  {label}: {value:+.8e}")
+    print(
+        f"  calculator trace: {fallback_trace:+.8e}\n"
+        f"  independent trace at calculator epsilon: "
+        f"{reference_at_calculator_epsilon:+.8e}\n"
+        f"  independent trace at reference epsilon: "
+        f"{reference_at_larger_epsilon:+.8e}\n"
+        f"  raw-image trace at reference epsilon: {raw_reference:+.8e}"
+    )
+    potential_pressure = -fallback_trace / 3.0
+    print(
+        f"  implied potential pressure: {potential_pressure:+.8e} eV/A^3 "
+        f"({potential_pressure * EV_A3_TO_BAR:+.1f} bar)"
+    )
+    print(f"isotropic Voigt projection: {'PASS' if projection_pass else 'FAIL'}")
+    print(f"calculator/reference wiring: {'PASS' if wiring_pass else 'FAIL'}")
+    print(f"finite-strain convergence: {'PASS' if convergence_pass else 'FAIL'}")
+    print(f"periodic-image invariance: {'PASS' if image_pass else 'FAIL'}")
+    print(f"HYDROSTATIC FD NPT GATE: {'PASS' if passed else 'FAIL'}")
+    return passed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ckpt", required=True)
@@ -146,49 +216,55 @@ def main() -> None:
     )
     parser.add_argument("--rtol", type=float, default=0.08)
     parser.add_argument("--atol-ev-a3", type=float, default=0.003)
+    parser.add_argument(
+        "--stress-fd-epsilon", type=float, default=0.003,
+        help="Finite strain used by the production hydrostatic-pressure calculator.",
+    )
+    parser.add_argument(
+        "--reference-epsilon", type=float, default=0.01,
+        help="Larger finite strain used to check convergence of the production estimate.",
+    )
+    parser.add_argument(
+        "--gate-only", action="store_true",
+        help="Skip the already-diagnosed analytic tensor and run only the production NPT gate.",
+    )
     args = parser.parse_args()
 
     dataset = load_waterbox_dataset(args.data_root)
     _, _, test_data = random_split(dataset, seed=args.data_seed)
     atoms = atoms_from_waterbox_sample(test_data[args.test_config_index])
     epsilons = [float(item) for item in args.epsilons.split(",")]
-    modes = ("raw", "wrapped") if args.coordinate_mode == "both" else (args.coordinate_mode,)
-    results = {
-        mode: evaluate_coordinate_mode(
-            atoms, args.ckpt, mode, epsilons, args.rtol, args.atol_ev_a3
-        )
-        for mode in modes
-    }
-
-    if "raw" in results and "wrapped" in results:
-        raw_component, _ = results["raw"]
-        wrapped_component, wrapped_hydro = results["wrapped"]
-        print("\n=== interpretation gate ===")
-        if not raw_component and wrapped_component:
-            print(
-                "Wrapped coordinates pass while raw coordinates fail: periodic image placement "
-                "contaminates the analytic strain derivative. The calculator should wrap only "
-                "its stress-evaluation copy before NPT is enabled."
+    if not args.gate_only:
+        modes = ("raw", "wrapped") if args.coordinate_mode == "both" else (args.coordinate_mode,)
+        results = {
+            mode: evaluate_coordinate_mode(
+                atoms, args.ckpt, mode, epsilons, args.rtol, args.atol_ev_a3
             )
-        elif not wrapped_component:
+            for mode in modes
+        }
+        print("\n=== analytic-stress diagnosis ===")
+        if any(component_passed for component_passed, _ in results.values()):
+            print("ANALYTIC STRESS: PASS for at least one tested coordinate mode and strain scale.")
+        else:
             print(
-                "Wrapped coordinates still fail the six-component check: coordinate images are "
-                "not the complete explanation. Do not enable analytic-stress NPT; the next step "
-                "is to test/implement a finite-difference hydrostatic pressure path."
-            )
-        if wrapped_hydro and not wrapped_component:
-            print(
-                "The wrapped hydrostatic trace passes even though the full tensor fails. This is "
-                "sufficient evidence to investigate a hydrostatic finite-difference fallback for "
-                "the isotropic barostat, but it is not a pass for the current calculator."
+                "ANALYTIC STRESS: FAIL. This path is disabled for NPT; the production gate below "
+                "tests the numerical hydrostatic replacement."
             )
 
-    passed = any(component_passed for component_passed, _ in results.values())
-    if not passed:
-        raise SystemExit(
-            "Stress verification failed at every epsilon and coordinate mode. Do not run NPT."
-        )
-    print("PASS: at least one coordinate mode and finite-difference scale agrees with analytic stress.")
+    fallback_passed = verify_hydrostatic_fallback(
+        atoms,
+        args.ckpt,
+        args.stress_fd_epsilon,
+        args.reference_epsilon,
+        args.rtol,
+        args.atol_ev_a3,
+    )
+    if not fallback_passed:
+        raise SystemExit("Hydrostatic finite-difference pressure verification failed. Do not run NPT.")
+    print(
+        "PASS: the finite-difference hydrostatic pressure implementation is internally consistent. "
+        "This does not establish physical pressure accuracy."
+    )
 
 
 if __name__ == "__main__":

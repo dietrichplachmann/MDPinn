@@ -92,7 +92,10 @@ class TensorNetCalculator(Calculator):
 
     implemented_properties = ["energy", "forces", "stress"]
 
-    def __init__(self, checkpoint_path=None, model=None, device=None, **kwargs):
+    def __init__(
+        self, checkpoint_path=None, model=None, device=None,
+        stress_mode="analytic", stress_fd_epsilon=0.003, **kwargs,
+    ):
         """Pass exactly one of checkpoint_path (loads a fresh model from
         disk, the original/only behavior before this parameter was added)
         or model (uses an already-loaded model object directly - added for
@@ -105,6 +108,17 @@ class TensorNetCalculator(Calculator):
         separately-loaded twin)."""
         super().__init__(**kwargs)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        if stress_mode not in {"analytic", "hydrostatic_fd"}:
+            raise ValueError(
+                "stress_mode must be 'analytic' or 'hydrostatic_fd', "
+                f"got {stress_mode!r}."
+            )
+        if not 0.0 < stress_fd_epsilon < 0.1:
+            raise ValueError(
+                f"stress_fd_epsilon must be between 0 and 0.1, got {stress_fd_epsilon}."
+            )
+        self.stress_mode = stress_mode
+        self.stress_fd_epsilon = float(stress_fd_epsilon)
         if model is not None:
             if checkpoint_path is not None:
                 raise ValueError("Pass exactly one of checkpoint_path or model, not both.")
@@ -113,6 +127,26 @@ class TensorNetCalculator(Calculator):
             if checkpoint_path is None:
                 raise ValueError("Must pass checkpoint_path or model.")
             self.model = load_waterbox_checkpoint(checkpoint_path, device=self.device)
+
+    def _energy_only(self, z, pos, batch, box):
+        """Evaluate energy without TorchMD-Net's force derivative.
+
+        In eval mode the force-producing forward frees the energy graph.  A
+        separate energy-only pass is therefore required both for analytic
+        strain differentiation and for finite-difference hydrostatic stress.
+        """
+        derivative_model = getattr(self.model, "model", None)
+        if derivative_model is None or not hasattr(derivative_model, "derivative"):
+            raise RuntimeError(
+                "Cannot locate TorchMD-Net derivative flag for stress evaluation."
+            )
+        original_derivative = derivative_model.derivative
+        try:
+            derivative_model.derivative = False
+            energy, _ = self.model(z, pos, batch=batch, box=box)
+        finally:
+            derivative_model.derivative = original_derivative
+        return energy
 
     def calculate(self, atoms=None, properties=None, system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)
@@ -123,7 +157,7 @@ class TensorNetCalculator(Calculator):
 
         need_stress = properties is not None and "stress" in properties
         strain_voigt = None
-        if need_stress:
+        if need_stress and self.stress_mode == "analytic":
             if box is None:
                 raise ValueError("Stress requires a periodic simulation cell.")
             strain_voigt = torch.zeros(6, dtype=pos.dtype, device=self.device, requires_grad=True)
@@ -145,25 +179,15 @@ class TensorNetCalculator(Calculator):
             # from that same forward pass.
             energy, forces = self.model(z, pos, batch=batch, box=box)
 
-            if need_stress:
+            if need_stress and self.stress_mode == "analytic":
                 # Perform a second, energy-only pass for the strain derivative.
                 # LNNP owns the actual TorchMD_Net as `.model`; toggling only
                 # its derivative flag avoids train-mode behavior while keeping
                 # the graph required for dE/d(strain).  NPT therefore costs one
                 # additional energy forward per step.
-                derivative_model = getattr(self.model, "model", None)
-                if derivative_model is None or not hasattr(derivative_model, "derivative"):
-                    raise RuntimeError(
-                        "Cannot locate TorchMD-Net derivative flag for stress evaluation."
-                    )
-                original_derivative = derivative_model.derivative
-                try:
-                    derivative_model.derivative = False
-                    stress_energy, _ = self.model(
-                        z, model_pos, batch=batch, box=model_box
-                    )
-                finally:
-                    derivative_model.derivative = original_derivative
+                stress_energy = self._energy_only(
+                    z, model_pos, batch=batch, box=model_box
+                )
                 strain_gradient = torch.autograd.grad(
                     stress_energy.sum(), strain_voigt, retain_graph=False, create_graph=False,
                     allow_unused=False,
@@ -172,6 +196,35 @@ class TensorNetCalculator(Calculator):
                 if not np.isfinite(volume) or volume <= 0:
                     raise ValueError(f"Stress requires a finite positive cell volume, got {volume}.")
                 self.results["stress"] = (strain_gradient / volume).detach().cpu().numpy()
+            elif need_stress:
+                if box is None:
+                    raise ValueError("Stress requires a periodic simulation cell.")
+                volume = float(atoms.get_volume())
+                if not np.isfinite(volume) or volume <= 0:
+                    raise ValueError(f"Stress requires a finite positive cell volume, got {volume}.")
+                epsilon = self.stress_fd_epsilon
+                # Use a wrapped coordinate copy to keep the numerical strain
+                # independent of which periodic images happen to be stored as
+                # atoms diffuse.  The live ASE positions are not modified.
+                wrapped_pos = torch.as_tensor(
+                    atoms.get_positions(wrap=True), dtype=pos.dtype, device=self.device
+                )
+                energy_plus = self._energy_only(
+                    z, wrapped_pos * (1.0 + epsilon), batch,
+                    box * (1.0 + epsilon),
+                )
+                energy_minus = self._energy_only(
+                    z, wrapped_pos * (1.0 - epsilon), batch,
+                    box * (1.0 - epsilon),
+                )
+                stress_trace = (energy_plus - energy_minus) / (2.0 * epsilon * volume)
+                isotropic_component = float(stress_trace.detach().squeeze().item()) / 3.0
+                # IsotropicMTKNPT uses only -trace(stress)/3. Returning the
+                # isotropic projection is deliberate; this mode must not be
+                # used with anisotropic/full-cell barostats.
+                self.results["stress"] = np.asarray(
+                    [isotropic_component, isotropic_component, isotropic_component, 0.0, 0.0, 0.0]
+                )
 
         self.results["energy"] = float(energy.detach().squeeze().item())
         self.results["forces"] = forces.detach().cpu().numpy()

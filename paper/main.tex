@@ -1322,17 +1322,16 @@ that the earlier globally seed-42 starts were not held out for every trained
 model. Velocity replicates are averaged within a trained seed before paired
 condition comparisons; they are not treated as independent trained models.
 
-NPT requires stress, which the original ASE adapter did not provide.
-\texttt{TensorNetCalculator} now computes the six-component ASE stress as the
-energy derivative with respect to homogeneous strain at fixed fractional
-coordinates. This code path is entered only when stress is requested, leaving
-the established NVE energy/force path unchanged. Before NPT,
-\texttt{src/verify\_waterbox\_stress.py} must show agreement with central
-finite-strain energy differences for all six components and across a strain
-step-size sweep. That check establishes implementation consistency, not
-physical pressure accuracy: the 1593-configuration WaterBox training set used
-here supplies energies and forces but no stress labels. Equilibrium density is
-therefore a stringent out-of-training-target validation.
+NPT requires hydrostatic pressure, which the original ASE adapter did not
+provide. An initial implementation computed the six-component ASE stress as
+the energy derivative with respect to homogeneous strain at fixed fractional
+coordinates. The established NVE energy/force path was unchanged unless ASE
+explicitly requested stress. The analytic implementation was subjected to
+central finite-strain checks before any NPT trajectory was permitted. Those
+checks establish implementation consistency rather than physical pressure
+accuracy: the 1593-configuration WaterBox training set used here supplies
+energies and forces but no stress labels. Equilibrium density is therefore a
+stringent out-of-training-target validation.
 
 The first implementation-consistency gate failed for both seed-0 conditions,
 so no NPT trajectory has been started. The discrepancy is structured rather
@@ -1344,13 +1343,28 @@ momentum-loss checkpoint showed the same qualitative pattern. Agreement of
 some other components rules out a simple global sign conversion, while
 small-strain numerical zeros are compatible with float32 energy
 cancellation but cannot explain the persistent large-component mismatch.
-The verifier now repeats the calculation after wrapping the same atoms into
-the primary cell, reports their raw fractional-image range, checks the
-hydrostatic stress trace directly, and extends the finite-difference sweep.
-This distinguishes image-dependent virial contamination from incomplete box
-gradients through the periodic neighbour operation. Analytic-stress NPT
-remains disabled unless that stricter gate passes; otherwise an isotropic
-finite-difference pressure implementation must be validated separately.
+The extended verifier found 15 of 192 atoms outside the primary fractional
+cell in the raw starting geometry. Wrapping changed the absolute-loss
+analytic trace from approximately $+0.0904$ to $+0.0827$\,eV/\AA$^3$ but did
+not repair it; the hydrostatic finite-strain trace was stable near
+$-0.0408$\,eV/\AA$^3$ at strain sizes 0.003 and 0.01. Periodic image placement
+therefore affects the analytic result but is not its root cause. The remaining
+failure is consistent with incomplete or unsuitable box-gradient propagation
+through the periodic neighbour operation, so the analytic tensor is disabled
+for NPT.
+
+The isotropic NPT path now uses a numerical hydrostatic replacement. At each
+stress request, a private wrapped coordinate copy and its cell are scaled by
+$1\pm0.003$; two energy-only evaluations give the central difference
+$\operatorname{tr}(\boldsymbol{\sigma})=V^{-1}\partial E/\partial\epsilon$.
+The calculator returns the isotropic Voigt projection because the selected
+Martyna--Tobias--Klein barostat consumes only hydrostatic pressure. This adds
+two model evaluations per NPT step and is not valid for anisotropic or
+full-cell barostats. A production-specific gate checks the projection, sign,
+volume normalization, convergence against strain 0.01, and periodic-image
+invariance. No NPT trajectory is permitted until that gate passes for both
+loss conditions. Even a pass does not validate the predicted pressure against
+DFT because stress was absent from training.
 
 The first production target is 300\,K and 1\,bar, followed only after pilot
 validation by a 250--315\,K density isobar comparable in intent to published

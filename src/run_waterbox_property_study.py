@@ -56,6 +56,7 @@ def main() -> None:
     parser.add_argument("--production-ps", type=float, default=100.0)
     parser.add_argument("--tdamp-fs", type=float, default=100.0)
     parser.add_argument("--pdamp-fs", type=float, default=1000.0)
+    parser.add_argument("--stress-fd-epsilon", type=float, default=0.003)
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--force", action="store_true",
                         help="Rerun cells even when their existing manifest says complete.")
@@ -97,6 +98,7 @@ def main() -> None:
                         pressure_bar=args.pressure_bar, dt_fs=args.dt_fs,
                         equilibration_ps=equilibration_ps, production_ps=production_ps,
                         tdamp_fs=args.tdamp_fs, pdamp_fs=args.pdamp_fs,
+                        stress_fd_epsilon=args.stress_fd_epsilon,
                     )
                     if manifest["status"] == "complete":
                         completed += 1
