@@ -6,6 +6,9 @@ workflow is a stability/energy-conservation diagnostic; this workflow uses a
 thermostat or thermostat+barostat to estimate equilibrium structural and
 thermophysical properties.  NPT additionally requires TensorNetCalculator's
 stress implementation to pass verify_waterbox_stress.py on the remote GPU.
+Equilibration and production coordinates are saved separately so transient
+structural failures can be diagnosed without contaminating production-only
+property estimates.
 
 Examples:
     python src/run_waterbox_ensemble.py --ensemble nvt --ckpt CKPT --out OUT \
@@ -117,6 +120,7 @@ def run_ensemble(
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
     history_path = out_dir / "thermodynamic_history.csv"
+    equilibration_trajectory_path = out_dir / "equilibration.xyz"
     trajectory_path = out_dir / "production.xyz"
     manifest_path = out_dir / "run_manifest.json"
 
@@ -145,6 +149,7 @@ def run_ensemble(
         raise ValueError("equilibration and production must each contain at least one MD step")
 
     history = []
+    equilibration_frames = []
     production_frames = []
     aborted_reason = None
 
@@ -185,8 +190,16 @@ def run_ensemble(
             raise PropertyRunAbort(aborted_reason)
 
     def record_trajectory() -> None:
-        if phase() == "production":
-            production_frames.append(atoms.copy())
+        frame = atoms.copy()
+        frame.info.update({
+            "step": dynamics.nsteps,
+            "time_fs": dynamics.nsteps * dt_fs,
+            "phase": phase(),
+        })
+        if phase() == "equilibration":
+            equilibration_frames.append(frame)
+        else:
+            production_frames.append(frame)
 
     dynamics.attach(record_history, interval=log_interval_steps)
     dynamics.attach(record_trajectory, interval=trajectory_interval_steps)
@@ -206,6 +219,8 @@ def run_ensemble(
                 writer = csv.DictWriter(handle, fieldnames=list(history[0]))
                 writer.writeheader()
                 writer.writerows(history)
+        if equilibration_frames:
+            ase_write(str(equilibration_trajectory_path), equilibration_frames)
         if production_frames:
             ase_write(str(trajectory_path), production_frames)
         manifest = {
@@ -231,7 +246,11 @@ def run_ensemble(
             "steps_completed": dynamics.nsteps,
             "last_time_fs": dynamics.nsteps * dt_fs,
             "history_path": str(history_path),
+            "equilibration_trajectory_path": (
+                str(equilibration_trajectory_path) if equilibration_frames else None
+            ),
             "trajectory_path": str(trajectory_path) if production_frames else None,
+            "n_equilibration_frames": len(equilibration_frames),
             "n_production_frames": len(production_frames),
             "software_versions": _software_versions(),
         }
@@ -241,6 +260,11 @@ def run_ensemble(
         print(f"ABORTED: {aborted_reason}")
     print(f"Wrote: {manifest_path}")
     print(f"Wrote: {history_path}")
+    if equilibration_frames:
+        print(
+            f"Wrote: {equilibration_trajectory_path} "
+            f"({len(equilibration_frames)} frames)"
+        )
     if production_frames:
         print(f"Wrote: {trajectory_path} ({len(production_frames)} frames)")
     return manifest

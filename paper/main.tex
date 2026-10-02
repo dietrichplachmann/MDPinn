@@ -1384,6 +1384,41 @@ volume derivative qualitatively even though stress was not a training target.
 This distinction between implementation verification and physical pressure
 accuracy is retained when interpreting the NPT pilot.
 
+The first fixed-volume property-driver smoke test completed 200 steps
+(20\,fs) for the absolute-loss seed-0 checkpoint but reproduced the known
+rapid relaxation on the learned PES. Temperature rose from 303.8\,K to a
+maximum of 726.6\,K and ended at 595.0\,K. Potential energy decreased by
+7.836\,eV while kinetic energy increased by 7.226\,eV; the Nos\'e--Hoover
+chain removed 0.610\,eV over the interval. Volume remained exactly fixed at
+2230.8236\,\AA$^3$ (0.858219\,g\,cm$^{-3}$). Because the 100\,fs thermostat
+damping time is five times the duration of this smoke run, completion verifies
+the NVT driver and output path rather than equilibration. A longer fixed-volume
+diagnostic spanning several damping times is required before cell motion is
+enabled, since otherwise thermal relaxation and barostat response would be
+confounded.
+
+That longer fixed-volume diagnostic did not equilibrate. Over 510\,fs, the
+potential energy continued decreasing by 33.426\,eV, including 6.191\,eV in
+the final 100\,fs. The thermostat removed 30.250\,eV of ordinary system
+energy, but the final-100-fs temperature remained
+$433.2\pm24.8$\,K and the endpoint was 431.8\,K. A preliminary check of the
+two saved 500 and 510\,fs frames found mean O--H distances near 0.966\,\AA,
+but H--O--H angles as small as $52.4^\circ$, intramolecular H--H distances
+as small as 0.904\,\AA{} with 8--11 of 64 molecules below 1.0\,\AA, and an
+intermolecular O--O minimum of 1.773\,\AA. The model is therefore continuing
+to descend into non-water-like geometries while the thermostat removes the
+released energy; this is not solely a thermostat-response delay.
+
+The same-molecule exclusion in MolecularZBL necessarily removes its
+repulsion from the collapsing intramolecular H--H coordinate. Conversely,
+the intermolecular O--O pair is covered, but the verified 2.0\,\AA{}
+cosine-tapered prior contributes only approximately 0.075\,eV at
+1.77\,\AA. These observations identify candidate weaknesses without proving
+which interaction causes the descent. The property workflow now retains the
+equilibration trajectory separately and measures fixed-membership molecular
+geometry and intermolecular minima through the entire transient before any
+NPT run is attempted.
+
 The first production target is 300\,K and 1\,bar, followed only after pilot
 validation by a 250--315\,K density isobar comparable in intent to published
 MACE water tests \citep{mace}. Fixed-density NVT production will supply
