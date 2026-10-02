@@ -11,6 +11,7 @@ does not establish that the predicted pressure is physically accurate.
 
 Example:
     python src/verify_waterbox_stress.py \
+      --data-seed 0 \
       --ckpt checkpoints/waterbox_study_zbl_bonded_ext70/water_absolute/seed0/best_model.ckpt
 """
 
@@ -207,7 +208,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ckpt", required=True)
     parser.add_argument("--data-root", default="./data")
-    parser.add_argument("--data-seed", type=int, default=42)
+    parser.add_argument(
+        "--data-seed", type=int, required=True,
+        help=(
+            "Dataset split seed. Pass the checkpoint's training seed so the gate and "
+            "rollout use the same held-out starting geometry; there is deliberately no "
+            "legacy seed-42 default."
+        ),
+    )
     parser.add_argument("--test-config-index", type=int, default=0)
     parser.add_argument("--epsilons", default="0.0003,0.001,0.003,0.01")
     parser.add_argument(
