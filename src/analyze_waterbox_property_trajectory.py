@@ -103,6 +103,36 @@ def _frame_metrics(atoms, group_ids: np.ndarray, groups: list[np.ndarray]) -> di
     }
 
 
+def _first_event(rows: list[dict], predicate):
+    return next((row for row in rows if predicate(row)), None)
+
+
+def _thermodynamic_summary(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    with path.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    if not rows:
+        return None
+    times = np.asarray([float(row["time_fs"]) for row in rows])
+    temperatures = np.asarray([float(row["temperature_k"]) for row in rows])
+    potential = np.asarray([float(row["epot_ev"]) for row in rows])
+    total = np.asarray([float(row["etot_ev"]) for row in rows])
+    tail = times >= times[-1] - 100.0
+    return {
+        "initial_temperature_k": float(temperatures[0]),
+        "final_temperature_k": float(temperatures[-1]),
+        "maximum_temperature_k": float(np.max(temperatures)),
+        "final_100fs_temperature_mean_k": float(np.mean(temperatures[tail])),
+        "final_100fs_temperature_std_k": float(np.std(temperatures[tail], ddof=1)),
+        "potential_energy_change_ev": float(potential[-1] - potential[0]),
+        "total_energy_change_ev": float(total[-1] - total[0]),
+        "final_100fs_potential_energy_change_ev": float(
+            potential[-1] - potential[np.flatnonzero(tail)[0]]
+        ),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
@@ -131,6 +161,21 @@ def main() -> None:
         "minimum_intermolecular_oo_a": min(row["intermolecular_oo_min_a"] for row in rows),
         "minimum_intermolecular_oh_a": min(row["intermolecular_oh_min_a"] for row in rows),
         "minimum_intermolecular_hh_a": min(row["intermolecular_hh_min_a"] for row in rows),
+        "first_hoh_angle_below_80_deg": _first_event(
+            rows, lambda row: row["hoh_angle_min_deg"] < 80.0
+        ),
+        "first_intramolecular_hh_below_1_2a": _first_event(
+            rows, lambda row: row["intramolecular_hh_min_a"] < 1.2
+        ),
+        "first_intramolecular_hh_below_1_0a": _first_event(
+            rows, lambda row: row["n_molecules_hh_below_1a"] > 0
+        ),
+        "first_intermolecular_oo_below_2_3a": _first_event(
+            rows, lambda row: row["intermolecular_oo_min_a"] < 2.3
+        ),
+        "thermodynamics": _thermodynamic_summary(
+            args.run_dir / "thermodynamic_history.csv"
+        ),
     }
     summary_path = args.run_dir / "structural_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2) + "\n")

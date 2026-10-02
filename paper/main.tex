@@ -1419,6 +1419,37 @@ equilibration trajectory separately and measures fixed-membership molecular
 geometry and intermolecular minima through the entire transient before any
 NPT run is attempted.
 
+The saved equilibration trajectory establishes the event order at 10\,fs
+resolution. At time zero the minimum H--O--H angle was $87.75^\circ$, the
+minimum intramolecular H--H distance was 1.349\,\AA, and no molecule had an
+H--H distance below 1.0\,\AA. By the first post-start frame at 10\,fs, the
+minimum angle had fallen to $53.09^\circ$ and one molecule had
+H--H=0.932\,\AA. An intermolecular O--O distance below the selected 2.3\,\AA{}
+diagnostic threshold first appeared at 100\,fs, after three molecules already
+had H--H below 1.0\,\AA. The complete-trajectory extrema were
+$33.02^\circ$, 0.800\,\AA{} intramolecular H--H, and 1.712\,\AA{}
+intermolecular O--O. In this trajectory, intramolecular angular collapse
+therefore precedes the close O--O event by at least 90\,fs; the latter is a
+downstream development rather than the trigger. A matched momentum-checkpoint
+trajectory is needed before treating this mechanism as common to both loss
+conditions.
+
+The matched momentum-loss trajectory is substantially improved but remains
+structurally invalid. Its final-100-fs temperature was
+$314.1\pm16.3$\,K, compared with $397.9\pm19.3$\,K for the matched absolute
+run. Potential energy decreased by 24.402\,eV overall and 1.695\,eV in the
+final 100\,fs, versus 31.488 and 4.559\,eV for the absolute model. Momentum
+delayed the first angle below $80^\circ$ from 10 to 20\,fs and the first
+intramolecular H--H below 1.0\,\AA{} from 10 to 30\,fs, while reducing the
+maximum simultaneous count from ten molecules to two. It did not prevent
+collapse: its extrema were $49.87^\circ$, 0.823\,\AA{} intramolecular H--H,
+and 1.754\,\AA{} intermolecular O--O, with two collapsed molecules still
+present at 510\,fs. The selected O--O$<2.3$\,\AA{} event appeared at 90\,fs
+for momentum and 100\,fs for absolute. The momentum regularizer therefore
+improves thermal and angular severity without restoring a valid equilibrium
+water ensemble. Neither trajectory can support equilibrium RDF, diffusion,
+or density claims.
+
 The first production target is 300\,K and 1\,bar, followed only after pilot
 validation by a 250--315\,K density isobar comparable in intent to published
 MACE water tests \citep{mace}. Fixed-density NVT production will supply
