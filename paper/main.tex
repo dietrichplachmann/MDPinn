@@ -1334,6 +1334,24 @@ physical pressure accuracy: the 1593-configuration WaterBox training set used
 here supplies energies and forces but no stress labels. Equilibrium density is
 therefore a stringent out-of-training-target validation.
 
+The first implementation-consistency gate failed for both seed-0 conditions,
+so no NPT trajectory has been started. The discrepancy is structured rather
+than a marginal tolerance miss: for the absolute-loss checkpoint the
+analytic $yy$ stress was approximately $+0.081$\,eV/\AA$^3$ while the
+finite-strain estimate converged near $-0.021$\,eV/\AA$^3$, and the analytic
+$xy$ component had the opposite sign from the numerical result. The
+momentum-loss checkpoint showed the same qualitative pattern. Agreement of
+some other components rules out a simple global sign conversion, while
+small-strain numerical zeros are compatible with float32 energy
+cancellation but cannot explain the persistent large-component mismatch.
+The verifier now repeats the calculation after wrapping the same atoms into
+the primary cell, reports their raw fractional-image range, checks the
+hydrostatic stress trace directly, and extends the finite-difference sweep.
+This distinguishes image-dependent virial contamination from incomplete box
+gradients through the periodic neighbour operation. Analytic-stress NPT
+remains disabled unless that stricter gate passes; otherwise an isotropic
+finite-difference pressure implementation must be validated separately.
+
 The first production target is 300\,K and 1\,bar, followed only after pilot
 validation by a 250--315\,K density isobar comparable in intent to published
 MACE water tests \citep{mace}. Fixed-density NVT production will supply
