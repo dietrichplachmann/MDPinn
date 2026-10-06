@@ -1,9 +1,13 @@
 #!/usr/bin/env python
 """Measure molecular distortion and close contacts in an NVT/NPT run.
 
-The molecule assignment is inferred once from the first saved equilibration
-frame and then held fixed.  This is important: re-inferring connectivity after
-a collapse could silently redefine an unphysical close contact as a bond.
+The molecule assignment is copied from dataset sample 0, exactly matching the
+fixed assignment constructed by ``train_waterbox._build_local_molecule_ids``.
+It is then held fixed for every trajectory frame.  Inferring connectivity from
+the analyzed test frame is unsafe: an ordinary AIMD snapshot can contain a
+hydrogen that is closer to a neighboring oxygen than to the oxygen associated
+with its fixed atom identity, causing distance-based grouping to invent
+OH/H3O fragments before the learned-potential trajectory has even started.
 """
 
 from __future__ import annotations
@@ -43,17 +47,45 @@ def _load_frames(run_dir: Path):
     return frames
 
 
-def _water_groups(numbers: np.ndarray, positions: np.ndarray, cell: np.ndarray):
-    group_ids = molecule_group_ids(numbers, positions, np.diag(cell).copy())
+def _water_groups_from_training_topology(run_dir: Path, frame, data_root: str | None):
+    """Reproduce the fixed molecule assignment used to train the checkpoint."""
+    manifest_path = run_dir / "run_manifest.json"
+    if data_root is None:
+        if not manifest_path.exists():
+            raise FileNotFoundError(
+                f"{manifest_path} is required to recover the training topology; "
+                "pass --data-root explicitly for a legacy run"
+            )
+        manifest = json.loads(manifest_path.read_text())
+        data_root = manifest.get("data_root")
+    if not data_root:
+        raise ValueError("data_root is absent from the run manifest; pass --data-root")
+
+    from waterbox_data import load_waterbox_dataset
+
+    reference = load_waterbox_dataset(data_root)[0]
+    reference_numbers = np.asarray(reference.z.detach().cpu(), dtype=int)
+    frame_numbers = np.asarray(frame.numbers, dtype=int)
+    if not np.array_equal(reference_numbers, frame_numbers):
+        raise ValueError(
+            "trajectory atom count/order does not match WaterBox dataset sample 0; "
+            "cannot safely transfer the fixed training topology"
+        )
+
+    reference_positions = np.asarray(reference.pos.detach().cpu())
+    reference_box = np.asarray(reference.box.detach().cpu()).reshape(3, 3)
+    group_ids = molecule_group_ids(
+        reference_numbers, reference_positions, np.diag(reference_box).copy()
+    )
     groups = [np.flatnonzero(group_ids == group) for group in np.unique(group_ids)]
-    bad = [Counter(numbers[group].tolist()) for group in groups
-           if Counter(numbers[group].tolist()) != Counter({8: 1, 1: 2})]
+    bad = [Counter(reference_numbers[group].tolist()) for group in groups
+           if Counter(reference_numbers[group].tolist()) != Counter({8: 1, 1: 2})]
     if bad:
         raise ValueError(
-            "first-frame connectivity did not resolve exclusively into H2O molecules; "
+            "dataset sample-0 connectivity did not resolve exclusively into H2O molecules; "
             f"bad compositions={bad[:5]}"
         )
-    return np.asarray(group_ids), groups
+    return np.asarray(group_ids), groups, str(data_root)
 
 
 def _frame_metrics(atoms, group_ids: np.ndarray, groups: list[np.ndarray]) -> dict:
@@ -136,12 +168,16 @@ def _thermodynamic_summary(path: Path) -> dict | None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument(
+        "--data-root", default=None,
+        help="Override the data root recorded in run_manifest.json.",
+    )
     args = parser.parse_args()
 
     frames = _load_frames(args.run_dir)
     first = frames[0]
-    group_ids, groups = _water_groups(
-        np.asarray(first.numbers), np.asarray(first.positions), np.asarray(first.cell)
+    group_ids, groups, topology_data_root = _water_groups_from_training_topology(
+        args.run_dir, first, args.data_root
     )
     rows = [_frame_metrics(frame, group_ids, groups) for frame in frames]
     output_path = args.run_dir / "structural_history.csv"
@@ -151,6 +187,8 @@ def main() -> None:
         writer.writerows(rows)
 
     summary = {
+        "topology_source": "dataset_sample_0_matching_training",
+        "topology_data_root": topology_data_root,
         "n_frames": len(rows),
         "n_water_molecules": len(groups),
         "initial": rows[0],
