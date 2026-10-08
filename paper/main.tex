@@ -1400,6 +1400,31 @@ implementation/stability diagnostic rather than an equilibrium-density
 measurement; matched-seed finite-difference gates are required before the
 momentum NPT diagnostic.
 
+The matched diagnostics now cover both conditions at training seeds 0 and 1.
+All four hydrostatic gates pass. At seed 0, absolute and momentum begin at
+$-31{,}302$ and $-36{,}290$\,bar total pressure and reach 595 and 623\,K,
+respectively, after 20\,fs; their potential energies fall by 7.85 and
+8.58\,eV. Fixed-topology analysis finds the first angle below $80^\circ$ at
+4 versus 16\,fs and the first intramolecular H--H below 1.2\,\AA{} at 4
+versus 18\,fs, so the momentum condition delays but does not remove the
+localized deformation. At seed 1, the initial pressures are less extreme
+($-10{,}348$ and $-8{,}718$\,bar), yet the endpoints are 615 and 652\,K and
+the potential drops are 7.97 and 8.99\,eV. The heating therefore does not
+track initial hydrostatic-pressure magnitude across these starts.
+
+The seed-1 start also revealed a topology-selection confound. Training fixes
+molecule identities once from dataset sample 0, but on this held-out
+configuration the maximum O--H distance under those identities is
+2.441\,\AA{} and the minimum O--H distance to a different fixed molecule is
+1.009\,\AA, consistent with a transferred or strongly shared proton relative
+to the fixed labels. The trajectory analyzer initially re-inferred membership
+from the test frame and therefore failed; it now reproduces the exact training
+topology and records that provenance. A dataset-wide held-out topology audit
+is required before choosing starts for seeds 2--5. Thus these runs support a
+model-stability preflight result, not an equilibrium pressure or density
+claim, and a common split-local index must not be assumed chemically
+comparable across independently shuffled training splits.
+
 The first fixed-volume property-driver smoke test completed 200 steps
 (20\,fs) for the absolute-loss seed-0 checkpoint but reproduced the known
 rapid relaxation on the learned PES. Temperature rose from 303.8\,K to a
