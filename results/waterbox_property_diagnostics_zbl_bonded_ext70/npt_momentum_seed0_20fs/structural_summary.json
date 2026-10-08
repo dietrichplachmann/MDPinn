@@ -1,4 +1,6 @@
 {
+  "topology_source": "dataset_sample_0_matching_training",
+  "topology_data_root": "./data",
   "n_frames": 21,
   "n_water_molecules": 64,
   "initial": {
