@@ -1,0 +1,249 @@
+{
+  "topology_source": "dataset_sample_0_matching_training",
+  "data_root": "./data",
+  "selection_rule": {
+    "maximum_assigned_oh_a": 1.3,
+    "minimum_intermolecular_oh_a": 1.3,
+    "require_n_h_closer_to_other_o": 0
+  },
+  "n_test_configs_by_seed": {
+    "0": 160,
+    "1": 160,
+    "2": 160,
+    "3": 160,
+    "4": 160,
+    "5": 160
+  },
+  "n_clean_by_seed": {
+    "0": 80,
+    "1": 92,
+    "2": 84,
+    "3": 94,
+    "4": 69,
+    "5": 75
+  },
+  "recommended_clean_configs": {
+    "0": [
+      {
+        "test_config_index": 0,
+        "raw_dataset_index": 1298,
+        "density_g_cm3": 0.8582322907623878,
+        "assigned_oh_max_a": 1.1666687825142428,
+        "intermolecular_oh_min_a": 1.5768932550478698
+      },
+      {
+        "test_config_index": 1,
+        "raw_dataset_index": 1175,
+        "density_g_cm3": 0.9238239894420803,
+        "assigned_oh_max_a": 1.1617786133372585,
+        "intermolecular_oh_min_a": 1.5793838175419512
+      },
+      {
+        "test_config_index": 4,
+        "raw_dataset_index": 1428,
+        "density_g_cm3": 0.8958525533144729,
+        "assigned_oh_max_a": 1.1938282467187873,
+        "intermolecular_oh_min_a": 1.4091669415223067
+      },
+      {
+        "test_config_index": 6,
+        "raw_dataset_index": 1559,
+        "density_g_cm3": 0.9200383397813122,
+        "assigned_oh_max_a": 1.269949354542483,
+        "intermolecular_oh_min_a": 1.4507056097982176
+      },
+      {
+        "test_config_index": 7,
+        "raw_dataset_index": 1575,
+        "density_g_cm3": 0.8831355430828131,
+        "assigned_oh_max_a": 1.2145752394884561,
+        "intermolecular_oh_min_a": 1.4331847509578157
+      }
+    ],
+    "1": [
+      {
+        "test_config_index": 1,
+        "raw_dataset_index": 1228,
+        "density_g_cm3": 0.9404800544561509,
+        "assigned_oh_max_a": 1.2465079737570968,
+        "intermolecular_oh_min_a": 1.4716435535130028
+      },
+      {
+        "test_config_index": 4,
+        "raw_dataset_index": 1254,
+        "density_g_cm3": 0.8173137101005392,
+        "assigned_oh_max_a": 1.1723498846211944,
+        "intermolecular_oh_min_a": 1.5155784036324413
+      },
+      {
+        "test_config_index": 5,
+        "raw_dataset_index": 1276,
+        "density_g_cm3": 0.9281569671647913,
+        "assigned_oh_max_a": 1.1812109796290855,
+        "intermolecular_oh_min_a": 1.4258008628026169
+      },
+      {
+        "test_config_index": 6,
+        "raw_dataset_index": 1106,
+        "density_g_cm3": 0.8558465774712364,
+        "assigned_oh_max_a": 1.1725367699266773,
+        "intermolecular_oh_min_a": 1.5103838426114282
+      },
+      {
+        "test_config_index": 7,
+        "raw_dataset_index": 1102,
+        "density_g_cm3": 0.8957453106825933,
+        "assigned_oh_max_a": 1.1882092658484071,
+        "intermolecular_oh_min_a": 1.5616306794018606
+      }
+    ],
+    "2": [
+      {
+        "test_config_index": 3,
+        "raw_dataset_index": 507,
+        "density_g_cm3": 0.8949664751275459,
+        "assigned_oh_max_a": 1.2518393131713401,
+        "intermolecular_oh_min_a": 1.501533364517145
+      },
+      {
+        "test_config_index": 5,
+        "raw_dataset_index": 1207,
+        "density_g_cm3": 0.8751975882841533,
+        "assigned_oh_max_a": 1.1659423054735154,
+        "intermolecular_oh_min_a": 1.4751358508595531
+      },
+      {
+        "test_config_index": 6,
+        "raw_dataset_index": 789,
+        "density_g_cm3": 0.7891277166384144,
+        "assigned_oh_max_a": 1.2094799471299447,
+        "intermolecular_oh_min_a": 1.6569436521563128
+      },
+      {
+        "test_config_index": 7,
+        "raw_dataset_index": 3,
+        "density_g_cm3": 0.9999975820577656,
+        "assigned_oh_max_a": 1.1583136083487695,
+        "intermolecular_oh_min_a": 1.51205734738868
+      },
+      {
+        "test_config_index": 8,
+        "raw_dataset_index": 1416,
+        "density_g_cm3": 0.834633118407844,
+        "assigned_oh_max_a": 1.1659807786832597,
+        "intermolecular_oh_min_a": 1.5510400537091567
+      }
+    ],
+    "3": [
+      {
+        "test_config_index": 0,
+        "raw_dataset_index": 1534,
+        "density_g_cm3": 0.8231622997290474,
+        "assigned_oh_max_a": 1.141565497468065,
+        "intermolecular_oh_min_a": 1.5338492056306896
+      },
+      {
+        "test_config_index": 1,
+        "raw_dataset_index": 895,
+        "density_g_cm3": 1.1478091960689534,
+        "assigned_oh_max_a": 1.2155649095413206,
+        "intermolecular_oh_min_a": 1.4396070247715422
+      },
+      {
+        "test_config_index": 2,
+        "raw_dataset_index": 1530,
+        "density_g_cm3": 0.8565764129280449,
+        "assigned_oh_max_a": 1.266784438968377,
+        "intermolecular_oh_min_a": 1.4900543666071675
+      },
+      {
+        "test_config_index": 4,
+        "raw_dataset_index": 1299,
+        "density_g_cm3": 0.8899637581721407,
+        "assigned_oh_max_a": 1.1700789105649547,
+        "intermolecular_oh_min_a": 1.4368863891232704
+      },
+      {
+        "test_config_index": 7,
+        "raw_dataset_index": 1528,
+        "density_g_cm3": 0.8760221250558489,
+        "assigned_oh_max_a": 1.1770154487787283,
+        "intermolecular_oh_min_a": 1.4509649845003456
+      }
+    ],
+    "4": [
+      {
+        "test_config_index": 0,
+        "raw_dataset_index": 1219,
+        "density_g_cm3": 0.9010085658004265,
+        "assigned_oh_max_a": 1.1841343245864733,
+        "intermolecular_oh_min_a": 1.403340036171171
+      },
+      {
+        "test_config_index": 7,
+        "raw_dataset_index": 868,
+        "density_g_cm3": 1.072452011759746,
+        "assigned_oh_max_a": 1.1893714706532321,
+        "intermolecular_oh_min_a": 1.4324850174195978
+      },
+      {
+        "test_config_index": 11,
+        "raw_dataset_index": 1170,
+        "density_g_cm3": 0.8811495777451656,
+        "assigned_oh_max_a": 1.1688508150494081,
+        "intermolecular_oh_min_a": 1.4775264321292996
+      },
+      {
+        "test_config_index": 15,
+        "raw_dataset_index": 347,
+        "density_g_cm3": 0.8903709851631829,
+        "assigned_oh_max_a": 0.9980312564093816,
+        "intermolecular_oh_min_a": 1.7281209567625546
+      },
+      {
+        "test_config_index": 16,
+        "raw_dataset_index": 931,
+        "density_g_cm3": 0.9960917777119721,
+        "assigned_oh_max_a": 1.2560774296161679,
+        "intermolecular_oh_min_a": 1.443832943177384
+      }
+    ],
+    "5": [
+      {
+        "test_config_index": 0,
+        "raw_dataset_index": 1010,
+        "density_g_cm3": 0.884366013873636,
+        "assigned_oh_max_a": 1.2230096222910953,
+        "intermolecular_oh_min_a": 1.4602766889140146
+      },
+      {
+        "test_config_index": 2,
+        "raw_dataset_index": 1307,
+        "density_g_cm3": 0.868530512939469,
+        "assigned_oh_max_a": 1.1631693832629002,
+        "intermolecular_oh_min_a": 1.5412651816674063
+      },
+      {
+        "test_config_index": 4,
+        "raw_dataset_index": 1531,
+        "density_g_cm3": 0.8594835439529892,
+        "assigned_oh_max_a": 1.2287509748052619,
+        "intermolecular_oh_min_a": 1.3691209348837061
+      },
+      {
+        "test_config_index": 5,
+        "raw_dataset_index": 863,
+        "density_g_cm3": 1.0341118155772548,
+        "assigned_oh_max_a": 1.202036272675809,
+        "intermolecular_oh_min_a": 1.4594749211093998
+      },
+      {
+        "test_config_index": 6,
+        "raw_dataset_index": 1333,
+        "density_g_cm3": 0.879266597959852,
+        "assigned_oh_max_a": 1.2153226823006618,
+        "intermolecular_oh_min_a": 1.4541527597425898
+      }
+    ]
+  }
+}
