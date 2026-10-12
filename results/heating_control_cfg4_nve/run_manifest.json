@@ -1,0 +1,16 @@
+{
+  "status": "complete",
+  "ensemble": "nve",
+  "checkpoint": "checkpoints/waterbox_study_zbl_bonded_ext70/water_absolute/seed1/best_model.ckpt",
+  "data_root": "./data",
+  "source_run": "results/heating_control_cfg4_nvt",
+  "dt_fs": 0.1,
+  "steps_completed": 5000,
+  "software_versions": {
+    "python": "3.9.13",
+    "ase": "3.26.0",
+    "numpy": "2.0.2",
+    "torch": "2.7.1+cu118",
+    "torchmd-net": "not-found"
+  }
+}
