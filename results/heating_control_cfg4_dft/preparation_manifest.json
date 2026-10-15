@@ -1,0 +1,68 @@
+{
+  "reference_url": "https://archive.materialscloud.org/records/eg3pn-1fw83",
+  "reference_archive_md5": "57f26ce2a2e717e1ddc66caddde20700",
+  "purpose": "Frozen-geometry reference energy and forces for the original start and final NVT frame. No geometry optimization or dynamics.",
+  "validation": "Prepared and structurally checked; not executed with CP2K. Calibrate initial calculation against dataset index 514 before interpreting final energy.",
+  "modifications": [
+    "DRIVER changed to ENERGY_FORCE; socket-driver block removed",
+    "Atomic SCF guess with initial screening disabled, using PREP=1",
+    "Cell and coordinates taken from the saved frame in angstrom; positions wrapped periodically without changing atom order",
+    "Relative basis paths corrected; force output enabled",
+    "HF MAX_MEMORY reduced from 37000 to 2000 MB per MPI process"
+  ],
+  "frames": {
+    "initial": {
+      "source": "results\\heating_control_cfg4_nvt\\equilibration.xyz",
+      "source_sha256": "08a591fda346a8ce2b1d7e6caf100d29e62bda0513ffce9f7a6db4880ead4833",
+      "source_header": "Lattice=\"12.928898811340332 0.0 0.0 -5.291772140481044e-07 12.928898811340332 0.0 -5.291772140481044e-07 -5.291772140481044e-07 12.928898811340332\" Properties=species:S:1:pos:R:3:momenta:R:3 step=0 time_fs=0.0 phase=equilibration pbc=\"T T T\"",
+      "cell_angstrom": [
+        [
+          12.928898811340332,
+          0.0,
+          0.0
+        ],
+        [
+          -5.291772140481044e-07,
+          12.928898811340332,
+          0.0
+        ],
+        [
+          -5.291772140481044e-07,
+          -5.291772140481044e-07,
+          12.928898811340332
+        ]
+      ],
+      "time_fs": 0.0,
+      "model_potential_energy_ev": -30016.861328125,
+      "n_atoms": 192,
+      "coordinate_sha256": "e92df6cba4ead409dad54c1c013e1a761821b7283b2ce710f9e1a2ad6f3fd530"
+    },
+    "final": {
+      "source": "results\\heating_control_cfg4_nvt\\production.xyz",
+      "source_sha256": "cc3220ef947c411987ef2d5568663a35314f70ce9e160b9dfd75b34f206074b0",
+      "source_header": "Lattice=\"12.928898811340332 0.0 0.0 -5.291772140481044e-07 12.928898811340332 0.0 -5.291772140481044e-07 -5.291772140481044e-07 12.928898811340332\" Properties=species:S:1:pos:R:3:momenta:R:3 step=10100 time_fs=1010.0 phase=production pbc=\"T T T\"",
+      "cell_angstrom": [
+        [
+          12.928898811340332,
+          0.0,
+          0.0
+        ],
+        [
+          -5.291772140481044e-07,
+          12.928898811340332,
+          0.0
+        ],
+        [
+          -5.291772140481044e-07,
+          -5.291772140481044e-07,
+          12.928898811340332
+        ]
+      ],
+      "time_fs": 1010.0,
+      "model_potential_energy_ev": -30047.185546875,
+      "n_atoms": 192,
+      "coordinate_sha256": "206eda5e76dbac345dd89648d8dd9d8218c4239641fcfc9ed71f27cdf9b5c57e"
+    }
+  },
+  "model_energy_change_ev": -30.32421875
+}
